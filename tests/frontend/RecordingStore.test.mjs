@@ -48,6 +48,18 @@ test('rejects a non-video MIME type returned by the recorder', () => {
 	)
 })
 
+test('does not reject a generic MIME type on an individual recorder chunk', async () => {
+	const store = new RecordingStore()
+	store.backend = 'memory'
+	store.setMimeType('video/mp4;codecs=avc1')
+
+	await store.append(new Blob(['video'], { type: 'application/octet-stream' }))
+	const file = await store.finalize()
+
+	assert.equal(file.type, 'video/mp4;codecs=avc1')
+	assert.equal(await file.text(), 'video')
+})
+
 test('falls back to IndexedDB when the first OPFS chunk cannot be written', async () => {
 	const originalIndexedDb = globalThis.indexedDB
 	globalThis.indexedDB = {}
@@ -78,6 +90,40 @@ test('falls back to IndexedDB when the first OPFS chunk cannot be written', asyn
 	}
 })
 
+test('falls back to memory when the first IndexedDB Blob write fails', async () => {
+	const store = new RecordingStore()
+	store.backend = 'indexeddb'
+	store.database = { close: () => {} }
+	store.appendIndexedDb = async () => {
+		throw new Error('IndexedDB Blob write failed')
+	}
+	const blob = new Blob(['video'], { type: 'video/webm' })
+
+	await store.append(blob)
+
+	assert.equal(store.backend, 'memory')
+	assert.deepEqual(store.memoryChunks, [blob])
+})
+
+test('falls back to memory when OPFS and IndexedDB both fail initially', async () => {
+	const store = new RecordingStore()
+	store.backend = 'opfs'
+	store.writable = {
+		write: async () => {
+			throw new Error('OPFS write failed')
+		},
+	}
+	store.fallbackFromEmptyOpfs = async () => {
+		store.backend = 'memory'
+	}
+	const blob = new Blob(['video'], { type: 'video/webm' })
+
+	await store.append(blob)
+
+	assert.equal(store.backend, 'memory')
+	assert.deepEqual(store.memoryChunks, [blob])
+})
+
 test('does not change backends after OPFS already contains video chunks', async () => {
 	const store = new RecordingStore()
 	store.backend = 'opfs'
@@ -95,4 +141,38 @@ test('does not change backends after OPFS already contains video chunks', async 
 		store.append(new Blob(['video'], { type: 'video/webm' })),
 		/OPFS became full/,
 	)
+})
+
+test('keeps recording in memory when persistent browser storage is unavailable', async () => {
+	const store = new RecordingStore()
+	store.backend = 'memory'
+	await store.append(new Blob(['first'], { type: 'video/mp4' }))
+	await store.append(new Blob(['second'], { type: 'video/mp4' }))
+
+	const file = await store.finalize()
+	assert.equal(file.type, 'video/mp4')
+	assert.equal(await file.text(), 'firstsecond')
+
+	await store.remove()
+	assert.equal(store.memoryChunks.length, 0)
+})
+
+test('finalizes the exact bytes written to OPFS', async () => {
+	const storedParts = []
+	const store = new RecordingStore()
+	store.backend = 'opfs'
+	store.writable = {
+		write: async (blob) => storedParts.push(blob),
+		close: async () => {},
+	}
+	store.fileHandle = {
+		getFile: async () => new Blob(storedParts, { type: 'video/mp4' }),
+	}
+
+	await store.append(new Blob(['first'], { type: 'video/mp4' }))
+	await store.append(new Blob(['second'], { type: 'video/mp4' }))
+	const file = await store.finalize()
+
+	assert.equal(file.type, 'video/mp4')
+	assert.equal(await file.text(), 'firstsecond')
 })

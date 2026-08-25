@@ -45,8 +45,8 @@ function transactionDone(transaction) {
 }
 
 /**
- * Bounded recording sink backed by OPFS, with IndexedDB Blob chunks as a
- * compatibility fallback. The caller owns queue backpressure.
+ * Bounded recording sink backed by OPFS, with IndexedDB Blob chunks and then
+ * memory as compatibility fallbacks. The caller owns queue backpressure.
  */
 export class RecordingStore {
 	constructor() {
@@ -56,9 +56,11 @@ export class RecordingStore {
 		this.writable = null
 		this.database = null
 		this.chunkIndex = 0
+		this.indexedDbChunksWritten = 0
 		this.opfsChunksWritten = 0
 		this.mimeType = ''
 		this.extension = ''
+		this.memoryChunks = []
 		this.storageFileName = `${this.recordingId}.recording`
 	}
 
@@ -104,11 +106,18 @@ export class RecordingStore {
 			return
 		} catch {
 			if (typeof indexedDB === 'undefined') {
-				throw new Error('Browser storage is unavailable')
+				this.backend = 'memory'
+				return
 			}
 		}
 
-		await this.openIndexedDb()
+		try {
+			await this.openIndexedDb()
+		} catch {
+			// Recording must remain usable in private browsing modes and older
+			// browsers that expose storage APIs but reject opening them.
+			this.backend = 'memory'
+		}
 	}
 
 	/** Open the IndexedDB fallback backend. */
@@ -133,7 +142,11 @@ export class RecordingStore {
 			// Stale-file cleanup will retry on the next page load.
 		}
 		this.fileHandle = null
-		await this.openIndexedDb()
+		try {
+			await this.openIndexedDb()
+		} catch {
+			this.backend = 'memory'
+		}
 	}
 
 	/**
@@ -145,10 +158,12 @@ export class RecordingStore {
 		const transaction = this.database.transaction(STORE_NAME, 'readwrite')
 		transaction.objectStore(STORE_NAME).put({
 			recordingId: this.recordingId,
-			index: this.chunkIndex++,
+			index: this.chunkIndex,
 			blob,
 		})
 		await transactionDone(transaction)
+		this.chunkIndex++
+		this.indexedDbChunksWritten++
 	}
 
 	/**
@@ -157,23 +172,42 @@ export class RecordingStore {
 	 * @param {Blob} blob Encoded media chunk.
 	 */
 	async append(blob) {
-		this.setMimeType(blob.type)
+		// MediaRecorder.mimeType is authoritative. Some browsers expose an empty
+		// or generic type on individual chunks even though their combined output
+		// is valid media.
+		if (!this.mimeType && blob.type?.toLowerCase().startsWith('video/')) {
+			this.setMimeType(blob.type)
+		}
 		if (this.backend === 'opfs') {
 			try {
 				await this.writable.write(blob)
 				this.opfsChunksWritten++
 				return
 			} catch (error) {
-				if (this.opfsChunksWritten > 0 || typeof indexedDB === 'undefined') {
+				if (this.opfsChunksWritten > 0) {
 					throw error
 				}
 				await this.fallbackFromEmptyOpfs()
 			}
 		}
 		if (this.backend !== 'indexeddb') {
+			if (this.backend === 'memory') {
+				this.memoryChunks.push(blob)
+				return
+			}
 			throw new Error('Recording storage is not open')
 		}
-		await this.appendIndexedDb(blob)
+		try {
+			await this.appendIndexedDb(blob)
+		} catch (error) {
+			if (this.indexedDbChunksWritten > 0) {
+				throw error
+			}
+			this.database?.close()
+			this.database = null
+			this.backend = 'memory'
+			this.memoryChunks.push(blob)
+		}
 	}
 
 	/**
@@ -193,12 +227,11 @@ export class RecordingStore {
 			return new File([file], fileName, { type: this.mimeType })
 		}
 
-		const chunks = await this.getIndexedDbChunks()
-		return new File(
-			chunks.map((chunk) => chunk.blob),
-			fileName,
-			{ type: this.mimeType },
-		)
+		const chunks =
+			this.backend === 'indexeddb'
+				? (await this.getIndexedDbChunks()).map((chunk) => chunk.blob)
+				: this.memoryChunks
+		return new File(chunks, fileName, { type: this.mimeType })
 	}
 
 	async getIndexedDbChunks() {
@@ -242,6 +275,7 @@ export class RecordingStore {
 				this.database.close()
 				this.database = null
 			}
+			this.memoryChunks = []
 		} catch {
 			// Cleanup is retried by cleanupStaleRecordings on the next page load.
 		}

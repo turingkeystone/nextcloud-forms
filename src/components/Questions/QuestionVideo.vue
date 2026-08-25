@@ -139,14 +139,14 @@
 								type="button"
 								:aria-label="t('forms', 'Switch camera')"
 								:title="t('forms', 'Switch camera')"
-								:disabled="recording || paused"
+								:disabled="recording || recordingBusy || paused"
 								@click.stop="cycleCamera">
 								<template #icon>
 									<NcIconSvgWrapper :svg="IconSwitchCamera" />
 								</template>
 							</NcButton>
 							<NcButton
-								v-if="!recording && !paused"
+								v-if="!recording && !recordingBusy && !paused"
 								type="button"
 								variant="primary"
 								:aria-label="t('forms', 'Start recording')"
@@ -188,7 +188,7 @@
 								</template>
 							</NcButton>
 							<NcButton
-								v-if="!recording && !paused"
+								v-if="!recording && !recordingBusy && !paused"
 								type="button"
 								:aria-label="t('forms', 'Recording settings')"
 								:title="t('forms', 'Recording settings')"
@@ -200,7 +200,7 @@
 								</template>
 							</NcButton>
 							<NcButton
-								v-if="!recording && !paused"
+								v-if="!recording && !recordingBusy && !paused"
 								type="button"
 								:aria-label="t('forms', 'Close camera')"
 								:title="t('forms', 'Close camera')"
@@ -252,7 +252,7 @@
 							<span>{{ t('forms', 'Camera') }}</span>
 							<select
 								v-model="selectedDeviceId"
-								:disabled="recording || paused"
+								:disabled="recording || recordingBusy || paused"
 								@change="switchCamera">
 								<option
 									v-for="device in devices"
@@ -266,7 +266,7 @@
 							<span>{{ t('forms', 'Resolution') }}</span>
 							<select
 								v-model="selectedResolution"
-								:disabled="recording || paused"
+								:disabled="recording || recordingBusy || paused"
 								@change="applySelection">
 								<option
 									v-for="resolution in supportedResolutionDefinitions"
@@ -281,7 +281,7 @@
 							<span>{{ t('forms', 'Frame rate') }}</span>
 							<select
 								v-model.number="selectedFrameRate"
-								:disabled="recording || paused"
+								:disabled="recording || recordingBusy || paused"
 								@change="applySelection">
 								<option :value="30">
 									{{ t('forms', '{rate} fps', { rate: 30 }) }}
@@ -295,7 +295,7 @@
 							<span>{{ t('forms', 'Recording format') }}</span>
 							<select
 								v-model="selectedFormat"
-								:disabled="recording || paused">
+								:disabled="recording || recordingBusy || paused">
 								<option
 									v-for="format in formats"
 									:key="format.id"
@@ -327,7 +327,7 @@
 							"
 							:aria-label="t('forms', 'Switch camera')"
 							:title="t('forms', 'Switch camera')"
-							:disabled="recording || paused"
+							:disabled="recording || recordingBusy || paused"
 							@click="cycleCamera">
 							<template #icon>
 								<NcIconSvgWrapper :svg="IconSwitchCamera" />
@@ -339,6 +339,7 @@
 								!immersiveMode
 								&& cameraOn
 								&& !recording
+								&& !recordingBusy
 								&& !paused
 								&& !previewUrl
 							"
@@ -416,6 +417,7 @@
 							v-if="
 								allowExistingVideo
 								&& !recording
+								&& !recordingBusy
 								&& !paused
 								&& !uploading
 							"
@@ -477,6 +479,10 @@ import {
 	isCompletedVideoUpload,
 } from '../../services/media/RecordedVideo.js'
 import {
+	cleanupStaleRecordings,
+	RecordingStore,
+} from '../../services/media/RecordingStore.js'
+import {
 	BROWSER_DEFAULT_FORMAT_ID,
 	calculateRecordingElapsedSeconds,
 	getRecorderMimeType,
@@ -496,6 +502,7 @@ import {
 import { uploadVideo } from '../../services/upload/VideoUploadTransport.js'
 
 const DEFAULT_DURATION_SECONDS = VIDEO_MAX_DURATION_SECONDS
+const MAX_PENDING_RECORDING_WRITES = 8
 
 export default {
 	name: 'QuestionVideo',
@@ -551,7 +558,13 @@ export default {
 			showImmersiveSettings: false,
 			recorder: null,
 			recordingChunks: [],
+			recordingStore: null,
+			recordingWriteChain: null,
+			recordingPendingWrites: 0,
+			recordingWriteError: null,
 			recording: false,
+			preparingRecording: false,
+			finalizing: false,
 			paused: false,
 			elapsedSeconds: 0,
 			timer: null,
@@ -682,8 +695,13 @@ export default {
 				&& !!this.selectedResolution
 				&& !!this.selectedFormat
 				&& !this.recording
+				&& !this.recordingBusy
 				&& !this.paused
 			)
+		},
+
+		recordingBusy() {
+			return this.preparingRecording || this.finalizing
 		},
 
 		hasUploadedValue() {
@@ -703,6 +721,7 @@ export default {
 			this.refreshDevices,
 		)
 		document.addEventListener('fullscreenchange', this.onFullscreenChange)
+		cleanupStaleRecordings()
 	},
 
 	beforeUnmount() {
@@ -728,6 +747,7 @@ export default {
 		this.exitImmersiveMode()
 		this.revokePreviewUrl()
 		this.recordingChunks = []
+		this.releaseRecordingStore()
 	},
 
 	methods: {
@@ -1033,6 +1053,7 @@ export default {
 			if (!this.canStartRecording) {
 				return
 			}
+			this.preparingRecording = true
 
 			try {
 				const format = this.formats.find(
@@ -1048,7 +1069,15 @@ export default {
 					? { mimeType: recorderMimeType }
 					: undefined
 				this.recorder = new MediaRecorder(this.stream, options)
+				await this.releaseRecordingStore()
+				this.recordingStore = new RecordingStore()
+				await this.recordingStore.open(
+					this.recorder.mimeType || recorderMimeType,
+				)
 				this.recordingChunks = []
+				this.recordingWriteChain = Promise.resolve()
+				this.recordingPendingWrites = 0
+				this.recordingWriteError = null
 				this.recordingFailed = false
 				this.recorder.ondataavailable = this.onDataAvailable
 				this.recorder.onstart = () => {
@@ -1068,12 +1097,15 @@ export default {
 				this.startTimer()
 				this.statusMessage = ''
 			} catch (error) {
+				await this.releaseRecordingStore()
 				this.recordingChunks = []
 				this.recorder = null
 				this.recording = false
 				this.paused = false
 				this.stopTimer()
 				this.showStatus(error.message, 'error')
+			} finally {
+				this.preparingRecording = false
 			}
 		},
 
@@ -1081,8 +1113,36 @@ export default {
 			if (!event.data?.size) {
 				return
 			}
-			this.recordingChunks.push(event.data)
 			this.recordedBytes += event.data.size
+			if (!this.recordingStore || !this.recordingWriteChain) {
+				this.recordingChunks.push(event.data)
+				return
+			}
+
+			this.recordingPendingWrites++
+			if (this.recordingPendingWrites > MAX_PENDING_RECORDING_WRITES) {
+				this.handleRecorderFailure(
+					new Error(
+						t(
+							'forms',
+							'The browser could not save the recorded video fast enough.',
+						),
+					),
+				)
+				return
+			}
+
+			const chunk = event.data
+			const recordingStore = this.recordingStore
+			this.recordingWriteChain = this.recordingWriteChain
+				.then(() => recordingStore.append(chunk))
+				.catch((error) => {
+					this.recordingWriteError ||= error
+					this.handleRecorderFailure(error)
+				})
+				.finally(() => {
+					this.recordingPendingWrites--
+				})
 		},
 
 		handleRecorderFailure(error) {
@@ -1133,21 +1193,32 @@ export default {
 
 		async onRecorderStopped() {
 			this.recording = false
+			this.finalizing = true
 			this.updateElapsedTime()
 			this.paused = false
 			this.stopTimer()
 			try {
+				await this.recordingWriteChain
+				if (this.recordingWriteError) {
+					throw this.recordingWriteError
+				}
 				if (this.recordingFailed) {
 					this.recordingChunks = []
 					this.recorder = null
+					await this.releaseRecordingStore()
 					return
 				}
-				const recording = createRecordedVideo(
-					this.recordingChunks,
-					this.recorder?.mimeType || '',
-				)
-				this.recordedBlob = recording.blob
-				this.recordedFile = recording.file
+				if (this.recordingStore) {
+					this.recordedFile = await this.recordingStore.finalize()
+					this.recordedBlob = this.recordedFile
+				} else {
+					const recording = createRecordedVideo(
+						this.recordingChunks,
+						this.recorder?.mimeType || '',
+					)
+					this.recordedBlob = recording.blob
+					this.recordedFile = recording.file
+				}
 				this.recordingChunks = []
 				if (this.recordedFile.size > VIDEO_MAX_BYTES) {
 					this.recordedBlob = null
@@ -1157,10 +1228,11 @@ export default {
 				this.revokePreviewUrl()
 				this.previewUrl = URL.createObjectURL(this.recordedBlob)
 				this.recorder = null
+				await this.exitImmersiveMode()
 				await this.$nextTick()
 				this.preparePreviewElement()
-				await this.exitImmersiveMode()
 			} catch (error) {
+				await this.releaseRecordingStore()
 				this.recordingChunks = []
 				this.recorder = null
 				this.recordedBlob = null
@@ -1171,6 +1243,8 @@ export default {
 						: error.message,
 					'error',
 				)
+			} finally {
+				this.finalizing = false
 			}
 		},
 
@@ -1234,7 +1308,7 @@ export default {
 			}
 			try {
 				await this.validateExistingVideo(file)
-				this.clearRecordedMedia()
+				await this.clearRecordedMedia()
 				this.recordedFile = file
 				this.recordedBlob = file
 				this.previewUrl = URL.createObjectURL(file)
@@ -1300,7 +1374,7 @@ export default {
 			const immersiveRequest = hasActiveCamera
 				? this.enterImmersiveMode()
 				: null
-			this.clearRecordedMedia()
+			await this.clearRecordedMedia()
 			if (!hasActiveCamera) {
 				await this.openCamera()
 				return
@@ -1311,16 +1385,28 @@ export default {
 			await immersiveRequest
 		},
 
-		clearRecordedMedia() {
+		async clearRecordedMedia() {
 			this.revokePreviewUrl()
 			this.recordedBlob = null
 			this.recordedFile = null
 			this.recordingChunks = []
+			await this.releaseRecordingStore()
 			this.elapsedSeconds = 0
 			this.recordingStartedAt = null
 			this.pausedStartedAt = null
 			this.totalPausedMilliseconds = 0
 			this.recordedBytes = 0
+		},
+
+		async releaseRecordingStore() {
+			const store = this.recordingStore
+			this.recordingStore = null
+			this.recordingWriteChain = null
+			this.recordingPendingWrites = 0
+			this.recordingWriteError = null
+			if (store) {
+				await store.remove()
+			}
 		},
 
 		revokePreviewUrl() {
@@ -1364,6 +1450,7 @@ export default {
 				this.revokePreviewUrl()
 				this.recordedBlob = null
 				this.recordedFile = null
+				await this.releaseRecordingStore()
 				this.closeCamera()
 				await this.exitImmersiveMode()
 				this.showStatus(t('forms', 'Video uploaded.'), 'success')
@@ -1397,7 +1484,12 @@ export default {
 		},
 
 		async validate() {
-			if (this.uploading || this.recording || this.paused) {
+			if (
+				this.uploading
+				|| this.recording
+				|| this.recordingBusy
+				|| this.paused
+			) {
 				this.errorMessage = t(
 					'forms',
 					'Please finish the video before submitting the form.',

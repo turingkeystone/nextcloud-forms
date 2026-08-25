@@ -113,14 +113,15 @@ export async function uploadVideo({
 				'apps/forms/api/v3/video-upload-sessions/{sessionId}/chunks/{index}',
 				{ sessionId: session.sessionId, index },
 			)
-			const formData = new FormData()
-			formData.append('uploadToken', session.uploadToken)
-			formData.append('contentRange', `bytes ${start}-${end - 1}/${file.size}`)
-			formData.append('chunk', chunk, `chunk-${index}.part`)
 			try {
 				await retry(() =>
-					axios.post(chunkUrl, formData, {
+					axios.put(chunkUrl, chunk, {
 						signal,
+						headers: {
+							'Content-Type': 'application/octet-stream',
+							'Content-Range': `bytes ${start}-${end - 1}/${file.size}`,
+							'X-Forms-Upload-Token': session.uploadToken,
+						},
 						onUploadProgress: (event) => {
 							onProgress(
 								calculateChunkUploadProgress(

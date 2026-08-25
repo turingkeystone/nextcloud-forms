@@ -54,6 +54,7 @@ OC.L10N.register(
     "Could not access the camera: {message}" : "无法访问摄像头：{message}",
     "The selected recording format is unavailable." : "所选录制格式不可用。",
     "Recording stopped because the browser recorder failed: {message}" : "浏览器录制器发生错误，录制已停止：{message}",
+    "The browser could not save the recorded video fast enough." : "浏览器保存录制视频的速度不足。",
     "The browser recorder returned no video data." : "浏览器录制器没有返回视频数据。",
     "The recorded video exceeds 16 GiB." : "录制的视频超过 16 GiB。",
     "The selected file is not a video." : "所选文件不是视频。",
