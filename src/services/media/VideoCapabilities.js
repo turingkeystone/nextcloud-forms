@@ -374,18 +374,31 @@ export function getRecorderMimeType(selectedFormat) {
 }
 
 /**
- * Start MediaRecorder with periodic output chunks.
+ * Decide whether MediaRecorder output may be persisted as periodic chunks.
  *
- * Safari's own MediaRecorder example uses a one-second timeslice. Requesting
- * dataavailable regularly also prevents long recordings from depending on an
- * implementation's internal single-Blob buffer size. Browsers may delay an
- * individual event, but the emitted chunks are still concatenated into one
- * standards-compliant Blob when recording stops.
+ * WebM chunks can be concatenated for browser-backed storage. WebKit has had
+ * interoperability problems with timesliced MP4 recordings, so MP4 and an
+ * unknown browser-default format follow the RecordingMobile-compatible path:
+ * one final Blob emitted when recording stops.
+ *
+ * @param {string|undefined} mimeType Recorder output MIME type.
+ * @return {boolean} Whether periodic chunks are safe for this container.
+ */
+export function shouldUseChunkedRecording(mimeType) {
+	return mimeType?.toLowerCase().startsWith('video/webm') ?? false
+}
+
+/**
+ * Start MediaRecorder using a container-compatible output strategy.
  *
  * @param {MediaRecorder} recorder Configured recorder.
  */
 export function startMediaRecorder(recorder) {
-	recorder.start(VIDEO_RECORDER_TIMESLICE_MS)
+	if (shouldUseChunkedRecording(recorder.mimeType)) {
+		recorder.start(VIDEO_RECORDER_TIMESLICE_MS)
+		return
+	}
+	recorder.start()
 }
 
 /**

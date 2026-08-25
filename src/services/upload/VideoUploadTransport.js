@@ -8,7 +8,7 @@ import { generateOcsUrl } from '@nextcloud/router'
 import OcsResponse2Data from '../../utils/OcsResponse2Data.js'
 import { calculateChunkUploadProgress } from './UploadProgress.js'
 
-const DEFAULT_CHUNK_SIZE = 8 * 1024 ** 2
+const DEFAULT_CHUNK_SIZE = 4 * 1024 ** 2
 const MAX_RETRIES = 3
 
 /**
@@ -113,15 +113,14 @@ export async function uploadVideo({
 				'apps/forms/api/v3/video-upload-sessions/{sessionId}/chunks/{index}',
 				{ sessionId: session.sessionId, index },
 			)
+			const formData = new FormData()
+			formData.append('uploadToken', session.uploadToken)
+			formData.append('contentRange', `bytes ${start}-${end - 1}/${file.size}`)
+			formData.append('chunk', chunk, `chunk-${index}.part`)
 			try {
 				await retry(() =>
-					axios.put(chunkUrl, chunk, {
+					axios.post(chunkUrl, formData, {
 						signal,
-						headers: {
-							'Content-Type': 'application/octet-stream',
-							'Content-Range': `bytes ${start}-${end - 1}/${file.size}`,
-							'X-Forms-Upload-Token': session.uploadToken,
-						},
 						onUploadProgress: (event) => {
 							onProgress(
 								calculateChunkUploadProgress(

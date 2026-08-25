@@ -17,6 +17,7 @@ import {
 	probeRecorderFormats,
 	probeResolutions,
 	recordingOrientationMatches,
+	shouldUseChunkedRecording,
 	startMediaRecorder,
 	VIDEO_MAX_BYTES,
 	VIDEO_MAX_DURATION_SECONDS,
@@ -199,17 +200,40 @@ test('passes the selected RecordingMobile MIME type to MediaRecorder', () => {
 	assert.equal(getRecorderMimeType({ mimeType: '' }), '')
 })
 
-test('requests MediaRecorder output every second for long Safari recordings', () => {
-	let timeslice
+test('persists WebM output in periodic browser-storage chunks', () => {
+	let startArguments
 	const recorder = {
-		start(value) {
-			timeslice = value
+		mimeType: 'video/webm;codecs=vp9,opus',
+		start(...args) {
+			startArguments = args
 		},
 	}
 
 	startMediaRecorder(recorder)
 	assert.equal(VIDEO_RECORDER_TIMESLICE_MS, 1_000)
-	assert.equal(timeslice, VIDEO_RECORDER_TIMESLICE_MS)
+	assert.deepEqual(startArguments, [VIDEO_RECORDER_TIMESLICE_MS])
+})
+
+test('keeps MP4 as one final Blob for WebKit-compatible playback', () => {
+	for (const mimeType of [
+		'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+		'video/mp4',
+		'',
+		undefined,
+	]) {
+		let startArguments
+		const recorder = {
+			mimeType,
+			start(...args) {
+				startArguments = args
+			},
+		}
+
+		assert.equal(shouldUseChunkedRecording(mimeType), false)
+		startMediaRecorder(recorder)
+		assert.deepEqual(startArguments, [])
+	}
+	assert.equal(shouldUseChunkedRecording('VIDEO/WEBM;CODECS=VP8'), true)
 })
 
 test('calculates a stable recording duration across timer throttling and pauses', () => {

@@ -493,6 +493,7 @@ import {
 	probeRecorderFormats,
 	recordingOrientationMatches,
 	requestPreferredVideoSettings,
+	shouldUseChunkedRecording,
 	startMediaRecorder,
 	VIDEO_MAX_BYTES,
 	VIDEO_MAX_DURATION_SECONDS,
@@ -1070,10 +1071,11 @@ export default {
 					: undefined
 				this.recorder = new MediaRecorder(this.stream, options)
 				await this.releaseRecordingStore()
-				this.recordingStore = new RecordingStore()
-				await this.recordingStore.open(
-					this.recorder.mimeType || recorderMimeType,
-				)
+				const outputMimeType = this.recorder.mimeType || recorderMimeType
+				if (shouldUseChunkedRecording(outputMimeType)) {
+					this.recordingStore = new RecordingStore()
+					await this.recordingStore.open(outputMimeType)
+				}
 				this.recordingChunks = []
 				this.recordingWriteChain = Promise.resolve()
 				this.recordingPendingWrites = 0

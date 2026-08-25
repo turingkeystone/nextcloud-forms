@@ -32,7 +32,7 @@ use OCP\Security\ISecureRandom;
 use Psr\Log\LoggerInterface;
 
 class VideoUploadSessionService {
-	public const CHUNK_SIZE = 8 * 1024 * 1024;
+	public const CHUNK_SIZE = 4 * 1024 * 1024;
 	public const MAX_VIDEO_SIZE = 16 * 1024 * 1024 * 1024;
 	private const SESSION_LIFETIME = 2 * 60 * 60;
 	private const APPDATA_FOLDER = 'video-upload-sessions';
