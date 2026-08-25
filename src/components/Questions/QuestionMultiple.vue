@@ -1,0 +1,690 @@
+<!--
+  - SPDX-FileCopyrightText: 2020 Nextcloud GmbH and Nextcloud contributors
+  - SPDX-License-Identifier: AGPL-3.0-or-later
+-->
+
+<template>
+	<Question
+		v-bind="questionProps"
+		:titlePlaceholder="answerType.titlePlaceholder"
+		:warningInvalid="answerType.warningInvalid"
+		:contentValid="contentValid"
+		:shiftDragHandle="shiftDragHandle"
+		:errorMessage="errorMessage"
+		:infoMessage="infoMessage"
+		v-on="commonListeners">
+		<template #actions>
+			<NcActionCheckbox
+				:modelValue="extraSettings?.shuffleOptions"
+				@update:modelValue="onShuffleOptionsChange">
+				{{ t('forms', 'Shuffle options') }}
+			</NcActionCheckbox>
+			<NcActionCheckbox
+				:modelValue="allowOtherAnswer"
+				@update:modelValue="onAllowOtherAnswerChange">
+				{{ t('forms', 'Add "other"') }}
+			</NcActionCheckbox>
+
+			<!-- For multiple (checkbox) options allow to limit the answers -->
+			<template v-if="!isUnique">
+				<!-- Allow setting a minimum of options to be checked -->
+				<NcActionCheckbox
+					:modelValue="!!extraSettings?.optionsLimitMin"
+					@update:modelValue="
+						(checked) => onLimitOptionsMin(checked ? 1 : null)
+					">
+					{{ t('forms', 'Require a minimum of options to be checked') }}
+				</NcActionCheckbox>
+				<NcActionInput
+					v-if="extraSettings?.optionsLimitMin"
+					type="number"
+					:label="t('forms', 'Minimum options to be checked')"
+					:labelOutside="false"
+					:showTrailingButton="false"
+					:modelValue="extraSettings.optionsLimitMin"
+					@update:modelValue="onLimitOptionsMin" />
+
+				<!-- Allow setting a maximum -->
+				<NcActionCheckbox
+					:modelValue="!!extraSettings?.optionsLimitMax"
+					@update:modelValue="
+						(checked) =>
+							onLimitOptionsMax(checked ? choices.length || 1 : null)
+					">
+					{{ t('forms', 'Require a maximum of options to be checked') }}
+				</NcActionCheckbox>
+				<NcActionInput
+					v-if="extraSettings?.optionsLimitMax"
+					type="number"
+					:label="t('forms', 'Maximum options to be checked')"
+					:labelOutside="false"
+					:showTrailingButton="false"
+					:modelValue="extraSettings.optionsLimitMax"
+					@update:modelValue="onLimitOptionsMax" />
+			</template>
+			<NcActionButton closeAfterClick @click="isOptionDialogShown = true">
+				<template #icon>
+					<NcIconSvgWrapper :svg="IconContentPaste" />
+				</template>
+				{{ t('forms', 'Add multiple options') }}
+			</NcActionButton>
+		</template>
+		<template v-if="readOnly">
+			<fieldset
+				:name="name || undefined"
+				:aria-labelledby="titleId"
+				:aria-describedby="description ? descriptionId : undefined">
+				<NcCheckboxRadioSwitch
+					v-for="answer in choices"
+					:key="answer.id"
+					:aria-describedby="hasInfo ? infoId : undefined"
+					:aria-errormessage="hasError ? errorId : undefined"
+					:aria-invalid="hasError ? 'true' : undefined"
+					:modelValue="questionValues"
+					:value="answer.id.toString()"
+					:name="`${id}-answer`"
+					:type="isUnique ? 'radio' : 'checkbox'"
+					:required="checkRequired(answer.id)"
+					@invalid.prevent="validate"
+					@update:modelValue="onChange"
+					@keydown.enter.exact.prevent="onKeydownEnter">
+					{{ answer.text }}
+				</NcCheckboxRadioSwitch>
+				<div v-if="allowOtherAnswer" class="question__other-answer">
+					<NcCheckboxRadioSwitch
+						:modelValue="questionValues"
+						:aria-errormessage="hasError ? errorId : undefined"
+						:aria-invalid="hasError ? 'true' : undefined"
+						:value="otherAnswer ?? QUESTION_EXTRASETTINGS_OTHER_PREFIX"
+						:name="`${id}-answer`"
+						:type="isUnique ? 'radio' : 'checkbox'"
+						:required="checkRequired('other-answer')"
+						class="question__label"
+						@invalid.prevent="validate"
+						@update:modelValue="onChangeOther"
+						@keydown.enter.exact.prevent="onKeydownEnter">
+						{{ t('forms', 'Other:') }}
+					</NcCheckboxRadioSwitch>
+					<NcInputField
+						class="question__input"
+						:label="placeholderOtherAnswer"
+						:required="otherAnswer !== undefined"
+						:modelValue="cachedOtherAnswerText"
+						@update:modelValue="onOtherAnswerTextChange" />
+				</div>
+			</fieldset>
+		</template>
+
+		<template v-else>
+			<div v-if="isLoading">
+				<NcLoadingIcon :size="64" />
+			</div>
+			<Draggable
+				v-else
+				v-model="choices"
+				class="question__content"
+				:animation="300"
+				direction="vertical"
+				handle=".option__drag-handle"
+				invertSwap
+				target=".sort-target"
+				@update="dirtyOptionsType = 'choice'"
+				@start="onDragStart"
+				@end="onDragEnd">
+				<TransitionGroup
+					tag="ul"
+					:name="isDragging ? undefined : 'options-list-transition'"
+					class="sort-target">
+					<AnswerInput
+						v-for="(answer, index) in choices"
+						:key="answer.local ? 'option-local' : answer.id"
+						ref="input"
+						:answer="answer"
+						:formId="formId"
+						:index="index"
+						:isUnique="isUnique"
+						:maxIndex="options.length - 1"
+						:maxOptionLength="maxStringLengths.optionText"
+						optionType="choice"
+						@createAnswer="onCreateAnswer"
+						@update:answer="updateAnswer"
+						@delete="deleteOption"
+						@focusNext="focusNextInput"
+						@moveUp="onOptionMoveUp(index, OptionType.Choice)"
+						@moveDown="onOptionMoveDown(index, OptionType.Choice)"
+						@tabbedOut="checkValidOption" />
+				</TransitionGroup>
+			</Draggable>
+			<li
+				v-if="allowOtherAnswer"
+				key="option-add-other"
+				class="question__item">
+				<NcIconSvgWrapper
+					:svg="pseudoIcon"
+					inline
+					class="question__item__pseudoInput" />
+				<input
+					:placeholder="t('forms', 'Other')"
+					class="question__input"
+					:disabled="!readOnly"
+					:maxlength="maxStringLengths.optionText"
+					minlength="1"
+					type="text"
+					:readonly="!readOnly" />
+			</li>
+		</template>
+
+		<!-- Add multiple options modal -->
+		<OptionInputDialog
+			v-model:open="isOptionDialogShown"
+			@multipleAnswers="handleMultipleOptions" />
+		<template #insert>
+			<slot name="insert" />
+		</template>
+	</Question>
+</template>
+
+<script>
+import IconCheckboxBlankOutline from '@material-symbols/svg-400/outlined/check_box_outline_blank.svg?raw'
+import IconContentPaste from '@material-symbols/svg-400/outlined/content_paste.svg?raw'
+import IconRadioboxBlank from '@material-symbols/svg-400/outlined/radio_button_unchecked.svg?raw'
+import { showError } from '@nextcloud/dialogs'
+import { translatePlural as n, translate as t } from '@nextcloud/l10n'
+import { VueDraggable as Draggable } from 'vue-draggable-plus'
+import NcActionButton from '@nextcloud/vue/components/NcActionButton'
+import NcActionCheckbox from '@nextcloud/vue/components/NcActionCheckbox'
+import NcActionInput from '@nextcloud/vue/components/NcActionInput'
+import NcCheckboxRadioSwitch from '@nextcloud/vue/components/NcCheckboxRadioSwitch'
+import NcIconSvgWrapper from '@nextcloud/vue/components/NcIconSvgWrapper'
+import NcInputField from '@nextcloud/vue/components/NcInputField'
+import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
+import OptionInputDialog from '../OptionInputDialog.vue'
+import AnswerInput from './AnswerInput.vue'
+import Question from './Question.vue'
+import QuestionMixin from '../../mixins/QuestionMixin.js'
+import QuestionMultipleMixin from '../../mixins/QuestionMultipleMixin.ts'
+import {
+	OptionType,
+	QUESTION_EXTRASETTINGS_OTHER_PREFIX,
+} from '../../models/Constants.ts'
+
+export default {
+	name: 'QuestionMultiple',
+
+	components: {
+		AnswerInput,
+		Draggable,
+		NcIconSvgWrapper,
+		NcActionButton,
+		NcActionCheckbox,
+		NcActionInput,
+		NcCheckboxRadioSwitch,
+		NcInputField,
+		NcLoadingIcon,
+		OptionInputDialog,
+		Question,
+	},
+
+	mixins: [QuestionMixin, QuestionMultipleMixin],
+	emits: ['update:values', 'update:isRequired'],
+
+	setup() {
+		return {
+			IconCheckboxBlankOutline,
+			IconContentPaste,
+			IconRadioboxBlank,
+		}
+	},
+
+	data() {
+		return {
+			/**
+			 * This is used to cache the "other" answer, meaning if the user:
+			 * checks "other" types text, unchecks "other" and then re-check "other" the typed text is preserved
+			 */
+			cachedOtherAnswerText: '',
+			QUESTION_EXTRASETTINGS_OTHER_PREFIX,
+
+			isDragging: false,
+			isOptionDialogShown: false,
+			isLoading: false,
+
+			OptionType,
+		}
+	},
+
+	computed: {
+		isUnique() {
+			return this.answerType.unique === true
+		},
+
+		shiftDragHandle() {
+			return !this.readOnly && this.options.length !== 0 && !this.isLastEmpty
+		},
+
+		pseudoIcon() {
+			return this.isUnique ? IconRadioboxBlank : IconCheckboxBlankOutline
+		},
+
+		placeholderOtherAnswer() {
+			if (this.readOnly) {
+				return this.answerType.submitPlaceholder
+			}
+			return this.answerType.createPlaceholder
+		},
+
+		questionValues() {
+			return this.isUnique ? this.values?.[0] : this.values
+		},
+
+		allowOtherAnswer() {
+			return this.extraSettings?.allowOtherAnswer ?? false
+		},
+
+		/**
+		 * The full "other" answer including prefix, undefined if no "other answer"
+		 */
+		otherAnswer() {
+			return this.values.find((v) =>
+				v.startsWith(QUESTION_EXTRASETTINGS_OTHER_PREFIX),
+			)
+		},
+
+		choices: {
+			get() {
+				return this.sortOptionsOfType(this.options, OptionType.Choice)
+			},
+
+			set(value) {
+				this.updateOptionsOrder(value, OptionType.Choice)
+			},
+		},
+
+		availableOptions() {
+			return (
+				this.choices.filter(({ text }) => text.trim() !== '').length
+				+ (this.allowOtherAnswer ? 1 : 0)
+			)
+		},
+
+		infoMessage() {
+			const min = this.extraSettings?.optionsLimitMin ?? 0
+			const max = this.extraSettings?.optionsLimitMax ?? 0
+
+			if (!min && !max) {
+				return null
+			}
+
+			if (min && max) {
+				if (min === max) {
+					return n(
+						'forms',
+						'Choose exactly one option',
+						'Choose exactly %n options',
+						min,
+					)
+				}
+
+				return t('forms', 'Choose between {min} and {max} options', {
+					min,
+					max,
+				})
+			}
+
+			if (min) {
+				return n(
+					'forms',
+					'Choose at least one option',
+					'Choose at least %n options',
+					min,
+				)
+			}
+
+			return n(
+				'forms',
+				'Choose at most one option',
+				'Choose at most %n options',
+				max,
+			)
+		},
+	},
+
+	watch: {
+		// Ensure that the "other" answer is reset after toggling the checkbox
+		otherAnswer() {
+			this.resetOtherAnswerText()
+		},
+	},
+
+	mounted() {
+		// Ensure the initial "other" answer is set
+		this.resetOtherAnswerText()
+	},
+
+	methods: {
+		async validate() {
+			if (this.isRequired && this.areNoneChecked) {
+				this.errorMessage = t('forms', 'You must answer this question')
+				return false
+			}
+
+			if (!this.isUnique) {
+				// Validate limits
+				const max = this.extraSettings.optionsLimitMax ?? 0
+				const min = this.extraSettings.optionsLimitMin ?? 0
+				if (max && this.values.length > max) {
+					this.errorMessage = n(
+						'forms',
+						'You must choose at most one option',
+						'You must choose at most %n options',
+						max,
+					)
+					return false
+				}
+				if (min && this.values.length < min) {
+					this.errorMessage = n(
+						'forms',
+						'You must choose at least one option',
+						'You must choose at least %n options',
+						min,
+					)
+					return false
+				}
+			}
+
+			this.errorMessage = null
+			return true
+		},
+
+		onDragStart() {
+			this.isDragging = true
+		},
+
+		onDragEnd() {
+			this.$nextTick(() => {
+				this.isDragging = false
+			})
+		},
+
+		/**
+		 * Resets the local "other" answer text to the one from the options if available
+		 */
+		resetOtherAnswerText() {
+			if (this.otherAnswer) {
+				// make sure to use cached value if empty value is passed
+				this.cachedOtherAnswerText =
+					this.otherAnswer.slice(
+						QUESTION_EXTRASETTINGS_OTHER_PREFIX.length,
+					) || this.cachedOtherAnswerText
+			}
+		},
+
+		onChange(value) {
+			this.$emit('update:values', this.isUnique ? [value].flat() : value)
+		},
+
+		/**
+		 * Handle toggling the "other"-answer checkbox / radio switch
+		 *
+		 * @param {string|string[]} value The new value of the answer(s)
+		 */
+		onChangeOther(value) {
+			value = [value].flat()
+			const pureValue = value.filter(
+				(v) => !v.startsWith(QUESTION_EXTRASETTINGS_OTHER_PREFIX),
+			)
+
+			if (value.length > pureValue.length) {
+				// make sure to add the cached text on re-enable
+				this.onChange([
+					...pureValue,
+					`${QUESTION_EXTRASETTINGS_OTHER_PREFIX}${this.cachedOtherAnswerText}`,
+				])
+			} else {
+				this.onChange(value)
+			}
+		},
+
+		/**
+		 * Updating the maximum number
+		 *
+		 * @param {number|null} max Maximum options
+		 */
+		onLimitOptionsMax(max) {
+			max = max && Number.parseInt(max.toString(), 10)
+			if (this.isUnique || max === null) {
+				// For unique (radio) options we cannot set limits, also if null is passed then we need to remove the limit
+				this.onExtraSettingsChange({ optionsLimitMax: undefined })
+			} else if (max) {
+				if (max > this.availableOptions) {
+					showError(
+						t(
+							'forms',
+							'Upper options limit must not exceed the number of available options',
+						),
+					)
+					this.onExtraSettingsChange({
+						optionsLimitMax: this.availableOptions || undefined,
+					})
+					return
+				}
+
+				if ((this.extraSettings.optionsLimitMin ?? 0) > max) {
+					showError(
+						t(
+							'forms',
+							'Upper options limit must be greater than the lower limit',
+						),
+					)
+					return
+				}
+				// If a valid number was passed, update the backend
+				this.onExtraSettingsChange({ optionsLimitMax: max })
+			}
+		},
+
+		/**
+		 * Update the minimum of checked options
+		 *
+		 * @param {number|null} min Minimum of checked options
+		 */
+		onLimitOptionsMin(min) {
+			min = min && Number.parseInt(min.toString(), 10)
+			if (this.isUnique || min === null) {
+				this.onExtraSettingsChange({ optionsLimitMin: undefined })
+			} else if (min) {
+				if (min > this.availableOptions - 1) {
+					showError(
+						t(
+							'forms',
+							'Lower options limit must be smaller than the number of available options',
+						),
+					)
+					this.onExtraSettingsChange({
+						optionsLimitMin: this.availableOptions - 1 || undefined,
+					})
+					return
+				}
+
+				if (
+					this.extraSettings.optionsLimitMax
+					&& min > this.extraSettings.optionsLimitMax
+				) {
+					showError(
+						t(
+							'forms',
+							'Lower options limit must be smaller than the upper limit',
+						),
+					)
+					return
+				}
+				this.onExtraSettingsChange({ optionsLimitMin: min })
+				if (min > 0) {
+					this.$emit('update:isRequired', true)
+				}
+			}
+		},
+
+		/**
+		 * Is the provided answer required ?
+		 * This is needed for checkboxes as html5
+		 * doesn't allow to require at least ONE checked.
+		 * So we require the one that are checked or all
+		 * if none are checked yet.
+		 *
+		 * @return {boolean}
+		 */
+		checkRequired() {
+			// false, if question not required
+			if (!this.isRequired) {
+				return false
+			}
+
+			// true for Radiobuttons
+			if (this.isUnique) {
+				return true
+			}
+
+			// For checkboxes, only required if no other is checked
+			return this.areNoneChecked
+		},
+
+		/**
+		 * Update status extra setting allowOtherAnswer and save on DB
+		 *
+		 * @param {boolean} allowOtherAnswer show/hide field for other answer
+		 */
+		onAllowOtherAnswerChange(allowOtherAnswer) {
+			return this.onExtraSettingsChange({ allowOtherAnswer })
+		},
+
+		/**
+		 * Handles the change event for the "Other" answer text input.
+		 *
+		 * @param {string} value - The new value entered for the "Other" answer.
+		 *
+		 * This method performs the following actions:
+		 * 1. Updates the cached value of the "Other" answer text (`cachedOtherAnswerText`).
+		 * 2. Prefixes the input value with a predefined constant (`QUESTION_EXTRASETTINGS_OTHER_PREFIX`).
+		 * 3. Emits an `update:values` event with the updated list of values:
+		 *    - If `isUnique` is true, the emitted values will only include the prefixed "Other" answer.
+		 *    - If `isUnique` is false, the emitted values will include all existing values
+		 *      (excluding any that start with the "Other" prefix) and the new prefixed "Other" answer.
+		 */
+		onOtherAnswerTextChange(value) {
+			this.cachedOtherAnswerText = value
+			// Prefix the value
+			const prefixedValue = `${QUESTION_EXTRASETTINGS_OTHER_PREFIX}${value}`
+			// emit the values and add the "other" answer
+			this.$emit(
+				'update:values',
+				this.isUnique
+					? [prefixedValue]
+					: [
+							...this.values.filter(
+								(v) =>
+									!v.startsWith(
+										QUESTION_EXTRASETTINGS_OTHER_PREFIX,
+									),
+							),
+							prefixedValue,
+						],
+			)
+		},
+	},
+}
+</script>
+
+<style lang="scss" scoped>
+.question__content {
+	display: flex;
+	flex-direction: column;
+	gap: var(--default-grid-baseline);
+}
+
+.question__item {
+	position: relative;
+	display: inline-flex;
+	min-height: var(--default-clickable-area);
+
+	&__pseudoInput {
+		color: var(--color-primary-element);
+		margin-inline-start: 2px;
+		z-index: 1;
+	}
+
+	.question__input {
+		width: calc(100% - var(--default-clickable-area));
+		position: relative;
+		inset-inline-start: -34px;
+		inset-block-start: 1px;
+		margin-inline-end: 10px !important;
+		padding-inline-start: 36px !important;
+	}
+
+	.question__label {
+		flex: 1 1 100%;
+		// Overwrite guest page core styles
+		text-align: start !important;
+		// Some rounding issues lead to this strange number, so label and answerInput show up a the same position, working on different browsers.
+		padding-block: 6.5px 0;
+		padding-inline: 30px 0;
+		line-height: 22px;
+		min-height: 34px;
+		height: min-content;
+		position: relative;
+
+		&::before {
+			box-sizing: border-box;
+			// Adjust position manually for proper position to text
+			position: absolute;
+			inset-block-start: 10px;
+			width: 16px;
+			height: 16px;
+			margin-inline: -30px 14px !important;
+			margin-block-end: 0;
+		}
+	}
+}
+
+.question__other-answer {
+	display: flex;
+	gap: 4px 16px;
+	flex-wrap: wrap;
+
+	.question__label {
+		flex-basis: content;
+	}
+
+	.question__input {
+		flex: 1;
+		min-width: 260px;
+	}
+
+	.input-field__input {
+		min-height: var(--default-clickable-area);
+	}
+}
+
+.question__other-answer:deep() .input-field__input {
+	min-height: var(--default-clickable-area);
+}
+
+.options-list-transition-move,
+.options-list-transition-enter-active,
+.options-list-transition-leave-active {
+	transition: all var(--animation-slow) ease;
+}
+
+.options-list-transition-enter-from,
+.options-list-transition-leave-to {
+	opacity: 0;
+	transform: translateX(var(--default-clickable-area));
+}
+
+/* ensure leaving items are taken out of layout flow so that moving
+   animations can be calculated correctly. */
+.options-list-transition-leave-active {
+	position: absolute;
+}
+</style>

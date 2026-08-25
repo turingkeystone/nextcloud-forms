@@ -1,0 +1,127 @@
+<?php
+
+/**
+ * SPDX-FileCopyrightText: 2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
+namespace OCA\Forms\Db;
+
+use OCP\AppFramework\Db\DoesNotExistException;
+use OCP\AppFramework\Db\QBMapper;
+use OCP\DB\QueryBuilder\IQueryBuilder;
+use OCP\IDBConnection;
+
+/**
+ * @extends QBMapper<UploadedFile>
+ */
+class UploadedFileMapper extends QBMapper {
+
+	/**
+	 * AnswerMapper constructor.
+	 * @param IDBConnection $db
+	 */
+	public function __construct(IDBConnection $db) {
+		parent::__construct($db, 'forms_v2_uploaded_files', UploadedFile::class);
+	}
+
+	/**
+	 * @param string $uploadedFileId
+	 * @return UploadedFile|null
+	 */
+	public function findByUploadedFileId(string $uploadedFileId): ?UploadedFile {
+		$qb = $this->db->getQueryBuilder();
+
+		$qb->select('*')
+			->from($this->getTableName())
+			->where(
+				$qb->expr()->eq('id', $qb->createNamedParameter($uploadedFileId))
+			);
+
+		return $this->findEntities($qb)[0] ?? null;
+	}
+
+	/**
+	 * @param string $uploadedFileId
+	 * @throws DoesNotExistException if not found
+	 * @return UploadedFile
+	 */
+	public function getByUploadedFileId(string $uploadedFileId): UploadedFile {
+		$uploadedFile = $this->findByUploadedFileId($uploadedFileId);
+		if ($uploadedFile === null) {
+			throw new DoesNotExistException(sprintf('Uploaded file with id "%s" not found', $uploadedFileId));
+		}
+
+		return $uploadedFile;
+	}
+
+	/**
+	 * find all uploaded files for a given form and question and compare with the given upload token.
+	 *
+	 * @throws DoesNotExistException
+	 */
+	public function getForSubmission(int $uploadedFileId, int $formId, int $questionId, string $uploadToken): UploadedFile {
+		$qb = $this->db->getQueryBuilder();
+
+		$qb->select('*')
+			->from($this->getTableName())
+			->where($qb->expr()->eq('id', $qb->createNamedParameter($uploadedFileId, IQueryBuilder::PARAM_INT)))
+			->andWhere($qb->expr()->eq('form_id', $qb->createNamedParameter($formId, IQueryBuilder::PARAM_INT)))
+			->andWhere($qb->expr()->eq('question_id', $qb->createNamedParameter($questionId, IQueryBuilder::PARAM_INT)));
+
+		$uploadedFile = $this->findEntities($qb)[0] ?? null;
+		if ($uploadedFile === null
+			|| $uploadedFile->getUploadToken() === null
+			|| !hash_equals($uploadedFile->getUploadToken(), $uploadToken)) {
+			throw new DoesNotExistException(sprintf('Uploaded file with id "%d" not found', $uploadedFileId));
+		}
+
+		return $uploadedFile;
+	}
+
+	/**
+	 * @param \DateTimeImmutable $dateTime
+	 * @return UploadedFile[]
+	 */
+	public function findUploadedEarlierThan(\DateTimeImmutable $dateTime): array {
+		$qb = $this->db->getQueryBuilder();
+
+		$qb->select('*')
+			->from($this->getTableName())
+			->where(
+				$qb->expr()->lt('created', $qb->createNamedParameter($dateTime->getTimestamp()))
+			);
+
+		return $this->findEntities($qb);
+	}
+
+	/**
+	 * @param int $formId
+	 * @return UploadedFile[]
+	 */
+	public function findByFormId(int $formId): array {
+		$qb = $this->db->getQueryBuilder();
+
+		$qb->select('*')
+			->from($this->getTableName())
+			->where(
+				$qb->expr()->eq('form_id', $qb->createNamedParameter($formId, IQueryBuilder::PARAM_INT))
+			);
+
+		return $this->findEntities($qb);
+	}
+
+	/**
+	 * @param int $formId
+	 */
+	public function deleteByFormId(int $formId): void {
+		$qb = $this->db->getQueryBuilder();
+
+		$qb->delete($this->getTableName())
+			->where(
+				$qb->expr()->eq('form_id', $qb->createNamedParameter($formId, IQueryBuilder::PARAM_INT))
+			);
+
+		$qb->executeStatement();
+	}
+}

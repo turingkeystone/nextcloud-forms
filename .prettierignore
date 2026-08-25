@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: 2024 Nextcloud GmbH and Nextcloud contributors
+# SPDX-License-Identifier: AGPL-3.0-only
+
+# version control systems directories
+**/.git
+**/.svn
+**/.hg
+
+# Github workflows
+.github/workflows/
+
+# 3rdparty dependencies
+**/node_modules
+**/vendor
+
+# Compiled JS output
+js/
+
+# Handled by transifex
+l10n/
+
+# OpenAPI
+openapi.json
+
+# PHP
+lib/
+**/*.php
+composer.json
+composer.lock

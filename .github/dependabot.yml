@@ -1,0 +1,84 @@
+# SPDX-FileCopyrightText: 2018-2025 Nextcloud GmbH and Nextcloud contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+version: 2
+updates:
+  - package-ecosystem: composer
+    target-branch: 'main'
+    directories:
+      - '/'
+      - '/vendor-bin/*/'
+    schedule:
+      interval: weekly
+      day: saturday
+      time: '03:00'
+      timezone: Europe/Paris
+    cooldown:
+      default-days: 4
+    open-pull-requests-limit: 10
+    labels:
+      - 3. to review
+      - dependencies
+
+  - package-ecosystem: npm
+    target-branch: 'main'
+    directory: '/'
+    schedule:
+      interval: weekly
+      day: saturday
+      time: '03:00'
+      timezone: Europe/Paris
+    cooldown:
+      default-days: 4
+      semver-major-days: 8
+    open-pull-requests-limit: 10
+    labels:
+      - 3. to review
+      - dependencies
+
+  - package-ecosystem: github-actions
+    target-branch: 'main'
+    directory: '/'
+    schedule:
+      interval: weekly
+      day: saturday
+      time: '03:00'
+      timezone: Europe/Paris
+    cooldown:
+      default-days: 4
+    open-pull-requests-limit: 10
+    labels:
+      - 3. to review
+      - dependencies
+
+  - package-ecosystem: composer
+    target-branch: 'stable5.2'
+    directories:
+      - '/'
+      - '/vendor-bin/*/'
+    schedule:
+      interval: weekly
+      day: saturday
+      time: '03:00'
+      timezone: Europe/Paris
+    cooldown:
+      default-days: 4
+    open-pull-requests-limit: 10
+    labels:
+      - 3. to review
+      - dependencies
+
+  - package-ecosystem: npm
+    target-branch: 'stable5.2'
+    directory: '/'
+    schedule:
+      interval: weekly
+      day: saturday
+      time: '03:00'
+      timezone: Europe/Paris
+    cooldown:
+      default-days: 4
+      semver-major-days: 8
+    open-pull-requests-limit: 10
+    labels:
+      - 3. to review
+      - dependencies

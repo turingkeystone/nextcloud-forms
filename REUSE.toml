@@ -1,0 +1,60 @@
+# SPDX-FileCopyrightText: 2024-2026 Nextcloud GmbH and Nextcloud contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+version = 1
+SPDX-PackageName = "forms"
+SPDX-PackageSupplier = "Nextcloud <info@nextcloud.com>"
+SPDX-PackageDownloadLocation = "https://github.com/nextcloud/forms"
+
+[[annotations]]
+path = [".github/workflows/*.patch"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "none"
+SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = ["l10n/**.js", "l10n/**.json", "js/**.js.map", "js/**.js"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2019-2026 Nextcloud GmbH and Nextcloud contributors"
+SPDX-License-Identifier = "AGPL-3.0-or-later"
+
+[[annotations]]
+path = ["composer.json", "composer.lock", "vendor-bin/*/composer.json", "vendor-bin/*/composer.lock", "package-lock.json", "package.json"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2019-2026 Nextcloud GmbH and Nextcloud contributors"
+SPDX-License-Identifier = "AGPL-3.0-or-later"
+
+[[annotations]]
+path = ["openapi.json"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2018-2026 Nextcloud GmbH and Nextcloud contributors"
+SPDX-License-Identifier = "AGPL-3.0-or-later"
+
+[[annotations]]
+path = [".prettierrc.json", ".env.development"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "Nextcloud GmbH and Nextcloud contributors"
+SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = [".tx/backport", ".tx/config"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2018 Nextcloud GmbH and Nextcloud contributors"
+SPDX-License-Identifier = "AGPL-3.0-or-later"
+
+[[annotations]]
+path = ["tests/phpunit.integration.xml", "tests/phpunit.xml", "tests/psalm-baseline.xml", "psalm.xml"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2019 Nextcloud GmbH and Nextcloud contributors"
+SPDX-License-Identifier = "AGPL-3.0-or-later"
+
+[[annotations]]
+path = ["img/*"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2018-2026 Google LLC, 2016-2024 Nextcloud GmbH and Nextcloud contributors"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = ["screenshots/*"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2023 Christian Hartmann <chris-hartmann@gmx.de>"
+SPDX-License-Identifier = "AGPL-3.0-or-later"

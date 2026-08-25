@@ -1,0 +1,27 @@
+{ "translations": {
+    "No" : "Nee",
+    "Yes" : "Jo",
+    "Copy" : "Kopie",
+    "Shared with you" : "Mat dir gedeelt",
+    "Select groups" : "Wiel Gruppen äus",
+    "Comments" : "Kommentarer",
+    "Cancel" : "Cancel",
+    "Required" : "Noutwendeg",
+    "Delete" : "Läschen",
+    "Checkbox" : "Checkbox",
+    "Other" : "Aner",
+    "never" : "Ni",
+    "Set expiration date" : "Verfallsdatum setzen",
+    "Group" : "Grupp",
+    "Share link" : "Link deelen",
+    "Edit" : "Änneren",
+    "Share" : "Deelen",
+    "Description" : "Beschreiwung",
+    "Download" : "Eroflueden",
+    "Search" : "Sichen",
+    "Sharing" : "Gedeelt",
+    "Settings" : "Astellungen",
+    "Date" : "Date",
+    "Time" : "Zäit"
+},"pluralForm" :"nplurals=2; plural=(n != 1);"
+}

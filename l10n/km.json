@@ -1,0 +1,26 @@
+{ "translations": {
+    "No" : "ទេ",
+    "Yes" : "បាទ ឬចាស",
+    "Shared with you" : "Shared with you",
+    "Cancel" : "លើកលែង",
+    "Options" : "ជម្រើស",
+    "Delete" : "លុប",
+    "Other" : "ផ្សេងៗ",
+    "never" : "មិនដែរ",
+    "Set expiration date" : "កំណត់​ពេល​ផុត​កំណត់",
+    "Group" : "Group",
+    "Share link" : "Share link",
+    "Edit" : "កែប្រែ",
+    "Share" : "ចែក​រំលែក",
+    "Description" : "ការ​អធិប្បាយ",
+    "Download" : "ទាញយក",
+    "Search" : "ស្វែងរក",
+    "Sharing" : "ការ​ចែក​រំលែក",
+    "Settings" : "ការកំណត់",
+    "Abort" : "អំពី",
+    "File" : "ឯកសារ",
+    "Date" : "Date",
+    "Time" : "ម៉ោង",
+    "Color" : "ព័ណ៌"
+},"pluralForm" :"nplurals=1; plural=0;"
+}

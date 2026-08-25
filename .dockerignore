@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: 2026 turingkeystone
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+**
+!container/
+!container/Dockerfile
+!container/entrypoint-with-forms.sh
+!container/sync-forms-bundle.sh
+!dist/
+!dist/forms/
+!dist/forms/**

@@ -1,0 +1,730 @@
+<!--
+  - SPDX-FileCopyrightText: 2020 Nextcloud GmbH and Nextcloud contributors
+  - SPDX-License-Identifier: AGPL-3.0-or-later
+-->
+
+<template>
+	<div class="section question-summary">
+		<h3 dir="auto">
+			{{ question.text }}
+		</h3>
+		<p class="question-summary__detail">
+			{{ questionTypeLabel }}
+		</p>
+
+		<!-- Ranking questions: Borda count with average rank -->
+		<div v-if="question.type === 'ranking'" class="question-summary__statistic">
+			<p class="question-summary__ranking-description">
+				{{
+					t(
+						'forms',
+						'Ranked by Borda count: each 1st place receives {n} points, 2nd place {n1} points, and so on. Higher score means more preferred.',
+						{
+							n: question.options.length,
+							n1: question.options.length - 1,
+						},
+					)
+				}}
+			</p>
+			<ol>
+				<li v-for="option in rankingStats" :key="option.id">
+					<label>
+						<span class="question-summary__statistic-score">
+							{{ option.bordaTotal }}
+						</span>
+						<span class="question-summary__statistic-percentage">
+							({{
+								t('forms', 'avg. rank {average}', {
+									average: option.avgRank,
+								})
+							}}):
+						</span>
+						<span
+							:class="{
+								'question-summary__statistic-text--best':
+									option.best,
+							}">
+							{{ option.text }}
+						</span>
+					</label>
+					<meter min="0" :max="maxBordaScore" :value="option.bordaTotal" />
+				</li>
+			</ol>
+		</div>
+
+		<!-- Answers with countable results for visualization -->
+		<ol
+			v-else-if="answerTypes[question.type].predefined"
+			class="question-summary__statistic">
+			<li v-for="option in questionOptions" :key="option.id">
+				<label :for="`option-${option.questionId}-${option.id}`">
+					{{ option.count }}
+					<span class="question-summary__statistic-percentage">
+						({{ option.percentage }}%):
+					</span>
+					<span
+						:class="{
+							'question-summary__statistic-text--best': option.best,
+						}">
+						{{ option.text }}
+					</span>
+				</label>
+				<meter
+					:id="`option-${option.questionId}-${option.id}`"
+					min="0"
+					:max="submissions.length"
+					:value="option.count" />
+			</li>
+		</ol>
+
+		<div v-else-if="question.type === 'grid'">
+			<table class="answer-grid">
+				<thead>
+					<tr>
+						<th class="first-column"></th>
+
+						<th v-for="column of gridColumns" :key="column.id">
+							{{ column.text }}
+						</th>
+					</tr>
+				</thead>
+				<tbody>
+					<tr v-for="row of gridRows" :key="row.id">
+						<td class="first-column">{{ row.text }}</td>
+						<td v-for="column of gridColumns" :key="column.id">
+							<template
+								v-if="
+									question.extraSettings.questionType === 'radio'
+								">
+								{{ gridValue[row.id][column.id].answersCount }} ({{
+									gridValue[row.id][column.id].percentage
+								}}%)
+							</template>
+
+							<template
+								v-if="
+									question.extraSettings.questionType
+									=== 'checkbox'
+								">
+								{{ gridValue[row.id][column.id].answersCount }} ({{
+									gridValue[row.id][column.id].percentage
+								}}%)
+							</template>
+
+							<template
+								v-if="
+									question.extraSettings.questionType === 'number'
+								">
+								{{ gridValue[row.id][column.id].averageValue }}
+							</template>
+						</td>
+					</tr>
+				</tbody>
+			</table>
+		</div>
+
+		<!-- Text answers are simply listed for now, could be automatically grouped in the future -->
+		<ul v-else class="question-summary__text">
+			<!-- Do not wrap the following line between tags! `white-space:pre-line` respects `\n` but would produce additional empty first line -->
+			<!-- eslint-disable-next-line -->
+			<li v-for="(answer, index) in answers" :key="answer.id" dir="auto">
+				<template v-if="answer.url">
+					<a :href="answer.url" target="_blank">
+						<NcIconSvgWrapper :svg="IconFile" inline />
+						{{ answer.text }}
+					</a>
+				</template>
+				<template v-else-if="question.type === 'color'">
+					<div class="color__result">
+						<div
+							v-if="answer.id !== 0"
+							:style="{ 'background-color': answer.text }"
+							:class="
+								index === 1
+									? 'color__field color__field__first'
+									: 'color__field'
+							" />
+						{{ answer.text }}
+					</div>
+				</template>
+				<template v-else>
+					{{ answer.text }}
+				</template>
+			</li>
+		</ul>
+	</div>
+</template>
+
+<script>
+import IconFile from '@material-symbols/svg-400/outlined/draft.svg?raw'
+import { generateUrl } from '@nextcloud/router'
+import NcIconSvgWrapper from '@nextcloud/vue/components/NcIconSvgWrapper'
+import answerTypes from '../../models/AnswerTypes.js'
+import { GridCellType, OptionType } from '../../models/Constants.ts'
+
+export default {
+	name: 'ResultsSummary',
+
+	components: {
+		NcIconSvgWrapper,
+	},
+
+	props: {
+		submissions: {
+			type: Array,
+			required: true,
+		},
+
+		question: {
+			type: Object,
+			required: true,
+		},
+	},
+
+	setup() {
+		return {
+			IconFile,
+		}
+	},
+
+	data() {
+		return {
+			answerTypes,
+		}
+	},
+
+	computed: {
+		questionTypeLabel() {
+			const label = this.answerTypes[this.question.type].label
+
+			if (this.question.type === 'grid') {
+				if (
+					this.question.extraSettings.questionType
+					=== GridCellType.Checkbox
+				) {
+					return label + ' (' + t('forms', 'Checkbox') + ')'
+				}
+				if (
+					this.question.extraSettings.questionType === GridCellType.Number
+				) {
+					return label + ' (' + t('forms', 'Number') + ')'
+				}
+				if (
+					this.question.extraSettings.questionType === GridCellType.Radio
+				) {
+					return label + ' (' + t('forms', 'Radio') + ')'
+				}
+			}
+
+			if (this.question.type === 'linearscale') {
+				const labelLowest =
+					this.question.extraSettings?.optionsLabelLowest
+					?? t('forms', 'Strongly disagree')
+				const labelHighest =
+					this.question.extraSettings?.optionsLabelHighest
+					?? t('forms', 'Strongly agree')
+				const optionsLowest =
+					this.question.extraSettings?.optionsLowest?.toString() ?? '1'
+				const optionsHighest =
+					this.question.extraSettings?.optionsHighest?.toString() ?? '5'
+
+				const descriptionParts = []
+				if (labelLowest !== '') {
+					descriptionParts.push(`${optionsLowest}: ${labelLowest}`)
+				}
+				if (labelHighest !== '') {
+					descriptionParts.push(`${optionsHighest}: ${labelHighest}`)
+				}
+				const description = ` (${descriptionParts.join(', ')})`
+				return label + description
+			}
+
+			return label
+		},
+
+		// For countable questions like multiple choice and checkboxes
+		questionOptions() {
+			// Build list of question options
+			let questionOptionsStats
+			if (this.question.type !== 'linearscale') {
+				questionOptionsStats = this.question.options.map((option) => ({
+					...option,
+					count: 0,
+					percentage: 0,
+				}))
+			} else {
+				questionOptionsStats = Array.from(
+					{
+						length:
+							(this.question.extraSettings?.optionsHighest ?? 5)
+							- (this.question.extraSettings?.optionsLowest ?? 1)
+							+ 1,
+					},
+					(_, i) => ({
+						text: (
+							i + (this.question.extraSettings?.optionsLowest ?? 1)
+						).toString(),
+						count: 0,
+						percentage: 0,
+					}),
+				)
+			}
+
+			// Also record 'Other'
+			if (this.question.extraSettings?.allowOtherAnswer) {
+				questionOptionsStats.unshift({
+					text: t('forms', 'Other'),
+					count: 0,
+					percentage: 0,
+				})
+			}
+
+			// Also record 'No response'
+			questionOptionsStats.unshift({
+				// TRANSLATORS Counts on Results-Summary, how many users did not respond to this question.
+				text: t('forms', 'No response'),
+				count: 0,
+				percentage: 0,
+			})
+
+			// Go through submissions to check which options have how many responses
+			this.submissions.forEach((submission) => {
+				const answers = submission.answers.filter(
+					(answer) => answer.questionId === this.question.id,
+				)
+				if (!answers.length) {
+					// Record 'No response'
+					questionOptionsStats[0].count++
+				}
+
+				// Check question options to find which needs to be increased
+				answers.forEach((answer) => {
+					const optionsStatIndex = questionOptionsStats.findIndex(
+						(option) => option.text === answer.text,
+					)
+					if (optionsStatIndex < 0) {
+						if (this.question.extraSettings?.allowOtherAnswer) {
+							questionOptionsStats[1].count++
+						} else {
+							questionOptionsStats.push({
+								text: answer.text,
+								count: 1,
+								percentage: 0,
+							})
+						}
+					} else {
+						questionOptionsStats[optionsStatIndex].count++
+					}
+				})
+			})
+
+			// Sort options by response count
+			if (this.question.type !== 'linearscale') {
+				questionOptionsStats.sort((object1, object2) => {
+					return object2.count - object1.count
+				})
+			} else {
+				// for linear scale questions move the "No response" element to the end
+				questionOptionsStats.push(questionOptionsStats.shift())
+			}
+
+			questionOptionsStats.forEach((questionOptionsStat) => {
+				// Fill percentage values
+				questionOptionsStat.percentage = Math.round(
+					(100 * questionOptionsStat.count) / this.submissions.length,
+				)
+				// Mark all best results
+				const maxCount = Math.max(
+					...questionOptionsStats.map((option) => option.count),
+				)
+				questionOptionsStat.best = questionOptionsStat.count === maxCount
+			})
+
+			return questionOptionsStats
+		},
+
+		/**
+		 * Borda count ranking statistics
+		 */
+		rankingStats() {
+			const n = this.question.options.length
+			const stats = {}
+
+			for (const opt of this.question.options) {
+				stats[opt.id] = {
+					id: opt.id,
+					text: opt.text,
+					bordaTotal: 0,
+					rankSum: 0,
+					count: 0,
+				}
+			}
+
+			for (const submission of this.submissions) {
+				const answer = submission.answers.find(
+					(a) => a.questionId === this.question.id,
+				)
+				if (!answer) continue
+				const ranked = JSON.parse(answer.text)
+				ranked.forEach((optionId, index) => {
+					if (stats[optionId]) {
+						stats[optionId].bordaTotal += n - index
+						stats[optionId].rankSum += index + 1
+						stats[optionId].count++
+					}
+				})
+			}
+
+			const result = Object.values(stats)
+				.map((s) => ({
+					...s,
+					avgRank: s.count > 0 ? (s.rankSum / s.count).toFixed(1) : '-',
+				}))
+				.sort((a, b) => b.bordaTotal - a.bordaTotal)
+
+			// Mark best (highest Borda score)
+			if (result.length > 0 && result[0].bordaTotal > 0) {
+				const best = result[0].bordaTotal
+				result.forEach((o) => {
+					o.best = o.bordaTotal === best
+				})
+			}
+
+			return result
+		},
+
+		maxBordaScore() {
+			const n = this.question.options.length
+			return n * this.submissions.length
+		},
+
+		gridColumns() {
+			return this.question.options.filter(
+				(option) => option.optionType === OptionType.Column,
+			)
+		},
+
+		gridRows() {
+			return this.question.options.filter(
+				(option) => option.optionType === OptionType.Row,
+			)
+		},
+
+		gridValue() {
+			const matrix = {}
+			for (const row of this.gridRows) {
+				for (const column of this.gridColumns) {
+					matrix[row.id] = matrix[row.id] || {}
+					matrix[row.id][column.id] = {
+						answersCount: 0,
+						percentage: 0,
+						totalValue: 0,
+						averageValue: 0,
+					}
+				}
+			}
+
+			const answers = []
+			this.submissions.forEach((submission) => {
+				submission.answers.forEach((answer) => {
+					if (answer.questionId === this.question.id) {
+						answers.push(answer)
+					}
+				})
+			})
+
+			answers.forEach((answer) => {
+				const answerJson = JSON.parse(answer.text)
+
+				if (
+					this.question.extraSettings.questionType === GridCellType.Radio
+				) {
+					for (const rowId of Object.keys(answerJson)) {
+						const columnId = answerJson[rowId]
+
+						if (matrix[rowId]?.[columnId]) {
+							matrix[rowId][columnId].answersCount++
+						}
+					}
+				} else if (
+					this.question.extraSettings.questionType
+					=== GridCellType.Checkbox
+				) {
+					for (const rowId of Object.keys(answerJson)) {
+						if (!Array.isArray(answerJson[rowId])) {
+							continue
+						}
+						for (const columnId of answerJson[rowId]) {
+							if (matrix[rowId]?.[columnId]) {
+								matrix[rowId][columnId].answersCount++
+							}
+						}
+					}
+				} else if (
+					this.question.extraSettings.questionType === GridCellType.Number
+				) {
+					for (const rowId of Object.keys(answerJson)) {
+						if (!matrix[rowId]) {
+							continue
+						}
+						for (const columnId of Object.keys(answerJson[rowId])) {
+							if ('' === answerJson[rowId][columnId]) {
+								continue
+							}
+
+							if (matrix[rowId][columnId]) {
+								matrix[rowId][columnId].totalValue += parseFloat(
+									answerJson[rowId][columnId],
+								)
+								matrix[rowId][columnId].answersCount++
+							}
+						}
+					}
+				}
+			})
+
+			for (const rowId of Object.keys(matrix)) {
+				for (const columnId of Object.keys(matrix[rowId])) {
+					let totalAnswersCount = this.submissions.length
+					if (
+						this.question.extraSettings.questionType
+						=== GridCellType.Checkbox
+					) {
+						totalAnswersCount = Object.entries(matrix[rowId])
+							.map(([, cell]) => cell.answersCount)
+							.reduce((a, b) => a + b, 0)
+					}
+					if (totalAnswersCount === 0) {
+						totalAnswersCount = 1
+					}
+
+					if (!matrix[rowId][columnId].answersCount) {
+						matrix[rowId][columnId].answersCount = 0
+					}
+
+					matrix[rowId][columnId].percentage = Math.round(
+						(100 * matrix[rowId][columnId].answersCount)
+							/ totalAnswersCount,
+					)
+
+					if (
+						this.question.extraSettings.questionType
+							=== GridCellType.Number
+						&& matrix[rowId][columnId].answersCount > 0
+					) {
+						matrix[rowId][columnId].averageValue =
+							matrix[rowId][columnId].totalValue
+							/ matrix[rowId][columnId].answersCount
+					}
+				}
+			}
+
+			return matrix
+		},
+
+		// For text answers like short answer and long text
+		answers() {
+			const answersModels = []
+
+			// Also record 'No response'
+			let noResponseCount = 0
+
+			// Go through submissions to check which options have how many responses
+			this.submissions.forEach((submission) => {
+				const answers = submission.answers.filter(
+					(answer) => answer.questionId === this.question.id,
+				)
+				if (!answers.length) {
+					// Record 'No response'
+					noResponseCount++
+				}
+
+				// Add text answers
+				if (
+					['date', 'time'].includes(this.question.type)
+					&& answers.length === 2
+				) {
+					// Combine the first two answers in order for date range questions
+					answersModels.push({
+						id: `${answers[0].id}-${answers[1].id}`,
+						text: `${answers[0].text} - ${answers[1].text}`,
+					})
+				} else {
+					answers.forEach((answer) => {
+						if (answer.fileId) {
+							answersModels.push({
+								id: answer.id,
+								text: answer.text,
+								url: generateUrl('/f/{fileId}', {
+									fileId: answer.fileId,
+								}),
+							})
+						} else {
+							answersModels.push({
+								id: answer.id,
+								text: answer.text,
+							})
+						}
+					})
+				}
+			})
+
+			// Calculate no response percentage
+			const noResponsePercentage = Math.round(
+				(100 * noResponseCount) / this.submissions.length,
+			)
+			answersModels.unshift({
+				id: 0,
+				text:
+					noResponseCount
+					+ ' ('
+					+ noResponsePercentage
+					+ '%): '
+					+ t('forms', 'No response'),
+			})
+
+			return answersModels
+		},
+	},
+}
+</script>
+
+<style lang="scss" scoped>
+.question-summary {
+	padding-inline: var(--default-clickable-area) 16px;
+
+	h3 {
+		font-weight: bold;
+	}
+
+	&__detail {
+		color: var(--color-text-lighter);
+		margin-block-start: -8px;
+	}
+
+	&__text,
+	&__statistic {
+		margin-block-start: 8px;
+	}
+
+	&__text {
+		list-style-type: initial;
+
+		li {
+			padding-block: 4px;
+			padding-inline: 0;
+			white-space: pre-line;
+
+			&:first-child {
+				font-weight: bold;
+			}
+		}
+	}
+
+	&__statistic {
+		list-style-type: none;
+
+		li {
+			position: relative;
+			padding-block: 8px;
+			padding-inline: 0;
+
+			label {
+				cursor: default;
+			}
+
+			.question-summary__ranking-description {
+				color: var(--color-text-maxcontrast);
+				font-style: italic;
+				margin-block-end: 8px;
+			}
+
+			.question-summary__statistic-text--best {
+				font-weight: bold;
+			}
+
+			.question-summary__statistic-percentage {
+				color: var(--color-text-maxcontrast);
+			}
+
+			meter {
+				display: block;
+				width: 100%;
+				margin-block-start: 4px;
+				background: var(--color-background-dark);
+				height: calc(var(--border-radius) * 2);
+				border-radius: var(--border-radius);
+
+				&::-webkit-meter-bar {
+					height: calc(var(--border-radius) * 2);
+				}
+
+				// The pseudo-classes of -moz and -webkit have to stay separated even with SCSS, otherwise they don’t work
+				&::-webkit-meter-optimum-value {
+					// TODO switch to old gradient if it becomes available in server
+					background: var(--gradient-primary-background);
+					border-radius: var(--border-radius);
+				}
+
+				&::-moz-meter-bar {
+					// TODO switch to old gradient if it becomes available in server
+					background: var(--gradient-primary-background);
+					border-radius: var(--border-radius);
+				}
+			}
+		}
+	}
+
+	.color__field {
+		width: 100px;
+		height: var(--default-clickable-area);
+		border-radius: var(--border-radius-element);
+		position: relative;
+		inset-block-start: 12px;
+
+		&__first {
+			margin-block-start: -12px;
+		}
+	}
+
+	.color__result {
+		align-items: baseline;
+		display: flex;
+		gap: calc(var(--clickable-area-small) / 2);
+	}
+
+	.answer-grid {
+		border-collapse: collapse;
+		width: 100%;
+
+		thead tr {
+			border-bottom: 2px solid var(--color-border);
+		}
+
+		td {
+			min-height: 34px;
+			min-width: 64px;
+			text-align: center;
+			padding: 8px 4px;
+
+			.checkbox-radio-switch {
+				display: flex;
+				justify-content: center;
+			}
+		}
+
+		th {
+			min-height: 44px;
+			padding: 8px 4px;
+			text-align: center;
+		}
+
+		.first-column {
+			min-width: 200px;
+			text-align: left;
+			position: sticky;
+			left: 0;
+		}
+	}
+}
+</style>

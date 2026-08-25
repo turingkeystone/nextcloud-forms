@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<files psalm-version="5.26.1@d747f6500b38ac4f7dfc5edbcae6e4b637d7add0">
+  <file src="lib/Controller/ApiController.php">
+    <RedundantCondition>
+      <code><![CDATA[method_exists($this->mimeTypeDetector, 'getAllMappings')]]></code>
+    </RedundantCondition>
+  </file>
+  <file src="lib/Db/Form.php">
+    <UndefinedMagicMethod>
+      <code><![CDATA[getAccessEnum]]></code>
+      <code><![CDATA[setAccessEnum]]></code>
+    </UndefinedMagicMethod>
+  </file>
+  <file src="lib/Db/Question.php">
+    <UndefinedMagicMethod>
+      <code><![CDATA[getExtraSettingsJson]]></code>
+      <code><![CDATA[setExtraSettingsJson]]></code>
+    </UndefinedMagicMethod>
+  </file>
+  <file src="lib/Db/Share.php">
+    <UndefinedMagicMethod>
+      <code><![CDATA[getPermissionsJson]]></code>
+      <code><![CDATA[setPermissionsJson]]></code>
+    </UndefinedMagicMethod>
+  </file>
+  <file src="lib/Migration/Version020300Date20210403214012.php">
+    <InvalidOperand>
+      <code><![CDATA[$result]]></code>
+      <code><![CDATA[$this->ensureColumnIsNullable($schema, 'forms_v2_questions', 'mandatory')]]></code>
+    </InvalidOperand>
+  </file>
+  <file src="lib/Migration/Version030000Date20220402100057.php">
+    <UndefinedClass>
+      <code><![CDATA[Type]]></code>
+    </UndefinedClass>
+  </file>
+  <file src="lib/Migration/Version030100Date20230115214242.php">
+    <InvalidOperand>
+      <code><![CDATA[$result]]></code>
+      <code><![CDATA[$this->ensureColumnIsNullable($schema, 'forms_v2_options', 'text')]]></code>
+      <code><![CDATA[$this->ensureColumnIsNullable($schema, 'forms_v2_questions', 'order')]]></code>
+      <code><![CDATA[$this->ensureColumnIsNullable($schema, 'forms_v2_questions', 'text')]]></code>
+      <code><![CDATA[$this->ensureColumnIsNullable($schema, 'forms_v2_shares', 'share_type')]]></code>
+    </InvalidOperand>
+  </file>
+</files>

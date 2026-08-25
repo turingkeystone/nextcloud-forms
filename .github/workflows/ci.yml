@@ -1,0 +1,242 @@
+# SPDX-FileCopyrightText: 2026 turingkeystone
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: Test and build private image
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * 1'
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: private-image-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository }}
+
+jobs:
+  quality:
+    name: Source checks and app bundle
+    runs-on: ubuntu-latest
+    outputs:
+      app-version: ${{ steps.app-version.outputs.value }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: '8.3'
+          extensions: bz2, ctype, curl, dom, fileinfo, gd, iconv, intl, json, libxml, mbstring, openssl, pcntl, posix, session, simplexml, xmlreader, xmlwriter, zip, zlib, sqlite, pdo_sqlite
+          coverage: none
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install dependencies
+        env:
+          CYPRESS_INSTALL_BINARY: '0'
+          PUPPETEER_SKIP_DOWNLOAD: 'true'
+        run: |
+          composer install --no-interaction --prefer-dist --optimize-autoloader
+          npm ci
+
+      - name: Check PHP and frontend sources
+        run: |
+          composer run lint
+          composer run cs:check
+          npm run lint
+          npm run test:unit:frontend
+          bash -n container/*.sh
+          container/test-sync.sh
+          container/test-entrypoint.sh
+
+      - name: Build production assets
+        run: npm run build
+
+      - name: Prepare production dependencies and bundle
+        run: |
+          composer install --no-dev --no-scripts --no-interaction --prefer-dist --optimize-autoloader
+          container/build-app-bundle.sh
+
+      - name: Read Forms version
+        id: app-version
+        run: echo "value=$(php -r '$xml = simplexml_load_file("appinfo/info.xml"); echo (string)$xml->version;')" >> "$GITHUB_OUTPUT"
+
+      - name: Upload app bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: forms-bundle
+          path: dist/forms
+          if-no-files-found: error
+          retention-days: 7
+
+  phpunit:
+    name: Nextcloud 33 / PHP 8.3 unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Nextcloud
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          repository: nextcloud/server
+          ref: stable33
+          submodules: recursive
+          path: server
+
+      - name: Checkout Forms
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          path: server/apps/forms
+
+      - name: Checkout Teams dependency
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          repository: nextcloud/circles
+          ref: stable33
+          path: server/apps/circles
+
+      - name: Checkout Analytics dependency
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          repository: rello/analytics
+          ref: master
+          path: server/apps/analytics
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: '8.3'
+          extensions: bz2, ctype, curl, dom, fileinfo, gd, iconv, intl, json, libxml, mbstring, openssl, pcntl, posix, session, simplexml, xmlreader, xmlwriter, zip, zlib, sqlite, pdo_sqlite
+          coverage: none
+          ini-values: disable_functions=
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Forms dependencies
+        working-directory: server/apps/forms
+        run: composer install --no-interaction --prefer-dist --optimize-autoloader
+
+      - name: Install Nextcloud and enable Forms
+        working-directory: server
+        run: |
+          mkdir data
+          php occ maintenance:install --database=sqlite --admin-user=admin --admin-pass=admin
+          php occ app:enable --force forms
+
+      - name: Run unit tests
+        working-directory: server/apps/forms
+        run: composer run test:unit -- --no-coverage
+
+      - name: Print Nextcloud log on failure
+        if: failure()
+        working-directory: server
+        run: test ! -f data/nextcloud.log || tail -n 300 data/nextcloud.log
+
+  container:
+    name: Build and inspect AIO image
+    needs: [quality, phpunit]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Download app bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: forms-bundle
+          path: dist/forms
+
+      - name: Prepare image tags
+        id: image
+        env:
+          APP_VERSION: ${{ needs.quality.outputs.app-version }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          primary="${IMAGE_NAME}:build-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          {
+            echo "primary=${primary}"
+            echo 'tags<<EOF'
+            echo "${primary}"
+            if [[ "${REF_NAME}" == "${DEFAULT_BRANCH}" ]]; then
+              echo "${IMAGE_NAME}:${APP_VERSION}"
+              echo "${IMAGE_NAME}:latest"
+            fi
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: container/Dockerfile
+          platforms: linux/amd64
+          pull: true
+          push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name == 'pull_request' }}
+          tags: ${{ steps.image.outputs.tags }}
+          build-args: |
+            AIO_NEXTCLOUD_IMAGE=ghcr.io/nextcloud-releases/aio-nextcloud:latest
+            FORMS_SOURCE_REVISION=${{ github.sha }}
+            FORMS_VERSION=${{ needs.quality.outputs.app-version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Pull published image for inspection
+        if: github.event_name != 'pull_request'
+        env:
+          IMAGE: ${{ steps.image.outputs.primary }}
+        run: docker pull "${IMAGE}"
+
+      - name: Inspect bundled image
+        env:
+          IMAGE: ${{ steps.image.outputs.primary }}
+          EXPECTED_VERSION: ${{ needs.quality.outputs.app-version }}
+        run: |
+          docker run --rm --entrypoint /bin/bash "${IMAGE}" -n /entrypoint.sh
+          docker run --rm --entrypoint /bin/bash "${IMAGE}" -n /sync-forms-bundle.sh
+          docker run --rm -e EXPECTED_VERSION --entrypoint php "${IMAGE}" -r '
+            $xml = simplexml_load_file("/opt/nextcloud-bundles/forms/appinfo/info.xml");
+            if ($xml === false || (string)$xml->id !== "forms" || (string)$xml->version !== getenv("EXPECTED_VERSION")) {
+              exit(1);
+            }
+            require "/usr/src/nextcloud/version.php";
+            $major = (int)$OC_Version[0];
+            $min = (int)$xml->dependencies->nextcloud["min-version"];
+            $max = (int)$xml->dependencies->nextcloud["max-version"];
+            if ($major < $min || $major > $max) {
+              exit(1);
+            }
+          '

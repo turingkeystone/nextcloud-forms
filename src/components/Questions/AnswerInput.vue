@@ -1,0 +1,588 @@
+<!--
+  - SPDX-FileCopyrightText: 2020 John Molakvoæ (skjnldsv) <skjnldsv@protonmail.com>
+  - SPDX-License-Identifier: AGPL-3.0-or-later
+-->
+
+<template>
+	<li class="question__item" @focusout="handleTabbing">
+		<NcIconSvgWrapper
+			v-if="!isDropdown"
+			:svg="pseudoIcon"
+			inline
+			class="question__item__pseudoInput" />
+		<input
+			ref="input"
+			v-model="localText"
+			:aria-label="ariaLabel"
+			:placeholder="placeholder"
+			class="question__input"
+			:class="{ 'question__input--shifted': !isDropdown }"
+			:maxlength="maxOptionLength"
+			type="text"
+			dir="auto"
+			@input="debounceOnInput"
+			@keydown.delete="deleteEntry"
+			@keydown.enter.prevent="onEnter"
+			@compositionstart="onCompositionStart"
+			@compositionend="onCompositionEnd" />
+
+		<!-- Actions for reordering and deleting the option  -->
+		<div v-if="!answer.local" class="option__actions">
+			<NcActions
+				:id="optionDragMenuId"
+				:container="`#${optionDragMenuId}`"
+				:aria-label="t('forms', 'Move option actions')"
+				class="option__drag-handle"
+				variant="tertiary-no-background">
+				<template #icon>
+					<NcIconSvgWrapper :svg="IconDragIndicator" />
+				</template>
+				<NcActionButton
+					ref="buttonOptionUp"
+					:disabled="index === 0"
+					@click="onMoveUp">
+					<template #icon>
+						<NcIconSvgWrapper :svg="IconArrowUp" />
+					</template>
+					{{ t('forms', 'Move option up') }}
+				</NcActionButton>
+				<NcActionButton
+					ref="buttonOptionDown"
+					:disabled="index === maxIndex"
+					@click="onMoveDown">
+					<template #icon>
+						<NcIconSvgWrapper :svg="IconArrowDown" />
+					</template>
+					{{ t('forms', 'Move option down') }}
+				</NcActionButton>
+			</NcActions>
+			<NcButton
+				:aria-label="t('forms', 'Delete answer')"
+				variant="tertiary"
+				@click="deleteEntry">
+				<template #icon>
+					<NcIconSvgWrapper :svg="IconDelete" />
+				</template>
+			</NcButton>
+		</div>
+		<div v-else class="option__actions">
+			<NcButton
+				:aria-label="t('forms', 'Add a new answer option')"
+				variant="tertiary"
+				:disabled="isIMEComposing || !canCreateLocalAnswer"
+				@click="createLocalAnswer">
+				<template #icon>
+					<NcIconSvgWrapper :svg="IconPlus" />
+				</template>
+			</NcButton>
+		</div>
+	</li>
+</template>
+
+<script>
+import IconPlus from '@material-symbols/svg-400/outlined/add.svg?raw'
+import IconCheckboxBlankOutline from '@material-symbols/svg-400/outlined/check_box_outline_blank.svg?raw'
+import IconDelete from '@material-symbols/svg-400/outlined/delete.svg?raw'
+import IconDragIndicator from '@material-symbols/svg-400/outlined/drag_indicator.svg?raw'
+import IconArrowDown from '@material-symbols/svg-400/outlined/keyboard_arrow_down.svg?raw'
+import IconArrowUp from '@material-symbols/svg-400/outlined/keyboard_arrow_up.svg?raw'
+import IconRadioboxBlank from '@material-symbols/svg-400/outlined/radio_button_unchecked.svg?raw'
+import IconTableColumn from '@material-symbols/svg-400/outlined/view_column.svg?raw'
+import IconTableRow from '@material-symbols/svg-400/outlined/view_stream.svg?raw'
+import axios from '@nextcloud/axios'
+import { showError } from '@nextcloud/dialogs'
+import { generateOcsUrl } from '@nextcloud/router'
+import debounce from 'debounce'
+import PQueue from 'p-queue'
+import { markRaw } from 'vue'
+import NcActionButton from '@nextcloud/vue/components/NcActionButton'
+import NcActions from '@nextcloud/vue/components/NcActions'
+import NcButton from '@nextcloud/vue/components/NcButton'
+import NcIconSvgWrapper from '@nextcloud/vue/components/NcIconSvgWrapper'
+import { INPUT_DEBOUNCE_MS, OptionType } from '../../models/Constants.ts'
+import logger from '../../utils/Logger.js'
+import OcsResponse2Data from '../../utils/OcsResponse2Data.js'
+
+export default {
+	name: 'AnswerInput',
+
+	components: {
+		NcIconSvgWrapper,
+		NcActions,
+		NcActionButton,
+		NcButton,
+	},
+
+	props: {
+		answer: {
+			type: Object,
+			required: true,
+		},
+
+		index: {
+			type: Number,
+			required: true,
+		},
+
+		formId: {
+			type: Number,
+			required: true,
+		},
+
+		isUnique: {
+			type: Boolean,
+			required: true,
+		},
+
+		isDropdown: {
+			type: Boolean,
+			default: false,
+		},
+
+		isRanking: {
+			type: Boolean,
+			default: false,
+		},
+
+		maxIndex: {
+			type: Number,
+			required: true,
+		},
+
+		maxOptionLength: {
+			type: Number,
+			required: true,
+		},
+
+		optionType: {
+			type: String,
+			required: true,
+		},
+	},
+
+	emits: [
+		'tabbedOut',
+		'createAnswer',
+		'update:answer',
+		'focusNext',
+		'delete',
+		'moveDown',
+		'moveUp',
+	],
+
+	setup() {
+		return {
+			IconArrowDown,
+			IconArrowUp,
+			IconDelete,
+			IconDragIndicator,
+			IconPlus,
+		}
+	},
+
+	data() {
+		return {
+			queue: null,
+			debounceOnInput: null,
+			isIMEComposing: false,
+			localText: this.answer?.text ?? '',
+		}
+	},
+
+	computed: {
+		canCreateLocalAnswer() {
+			if (this.answer.local) {
+				return !!this.localText?.trim()
+			}
+			return !!this.answer.text?.trim()
+		},
+
+		ariaLabel() {
+			if (this.answer.local) {
+				if (this.optionType === OptionType.Column) {
+					return t('forms', 'Add a new column')
+				}
+				if (this.optionType === OptionType.Row) {
+					return t('forms', 'Add a new row')
+				}
+
+				return t('forms', 'Add a new answer option')
+			}
+
+			if (this.optionType === OptionType.Column) {
+				return t('forms', 'The text of column {index}', {
+					index: this.index + 1,
+				})
+			}
+
+			if (this.optionType === OptionType.Row) {
+				return t('forms', 'The text of row {index}', {})
+			}
+
+			return t('forms', 'The text of option {index}', {
+				index: this.index + 1,
+			})
+		},
+
+		optionDragMenuId() {
+			return `q${this.answer.questionId}o${this.answer.id}o${this.optionType}__drag_menu`
+		},
+
+		placeholder() {
+			if (this.answer.local) {
+				if (this.optionType === OptionType.Column) {
+					return t('forms', 'Add a new column')
+				}
+
+				if (this.optionType === OptionType.Row) {
+					return t('forms', 'Add a new row')
+				}
+
+				return t('forms', 'Add a new answer option')
+			}
+
+			if (this.optionType === OptionType.Column) {
+				return t('forms', 'Column number {index}', { index: this.index + 1 })
+			}
+
+			if (this.optionType === OptionType.Row) {
+				return t('forms', 'Row number {index}', { index: this.index + 1 })
+			}
+
+			return t('forms', 'Answer number {index}', { index: this.index + 1 })
+		},
+
+		pseudoIcon() {
+			if (this.answer.local) {
+				return IconPlus
+			}
+
+			if (this.optionType === OptionType.Column) {
+				return IconTableColumn
+			}
+
+			if (this.optionType === OptionType.Row) {
+				return IconTableRow
+			}
+
+			if (this.isRanking) {
+				return IconDragIndicator
+			}
+
+			return this.isUnique ? IconRadioboxBlank : IconCheckboxBlankOutline
+		},
+	},
+
+	watch: {
+		// Keep localText in sync when the parent replaces/updates the answer prop
+		answer: {
+			handler(newVal) {
+				this.localText = newVal?.text ?? ''
+			},
+
+			deep: true,
+		},
+	},
+
+	created() {
+		this.queue = markRaw(new PQueue({ concurrency: 1 }))
+
+		// As data instead of method, to have a separate debounce per AnswerInput
+		this.debounceOnInput = debounce((event) => {
+			return this.queue.add(() => this.onInput(event))
+		}, INPUT_DEBOUNCE_MS)
+	},
+
+	methods: {
+		handleTabbing() {
+			this.$emit('tabbedOut', this.optionType)
+		},
+
+		/**
+		 * Focus the input
+		 */
+		focus() {
+			this.$refs.input?.focus()
+		},
+
+		/**
+		 * Option changed, processing the data
+		 *
+		 * @param {InputEvent} event The input event that triggered adding a new entry
+		 */
+		async onInput({ target, isComposing }) {
+			if (this.answer.local) {
+				this.localText = target.value
+				return
+			}
+
+			if (!isComposing && !this.isIMEComposing && target.value !== '') {
+				// clone answer
+				const answer = { ...this.answer }
+				answer.text = this.$refs.input.value
+
+				await this.updateAnswer(answer)
+
+				// Forward changes, but use current answer.text to avoid erasing
+				// any in-between changes while updating the answer
+				answer.text = this.$refs.input.value
+				this.$emit('update:answer', this.index, answer)
+			}
+		},
+
+		/**
+		 * Handle Enter key: create local answer or move focus
+		 *
+		 * @param {KeyboardEvent} e the keydown event
+		 */
+		onEnter(e) {
+			if (this.answer.local) {
+				this.createLocalAnswer(e)
+				return
+			}
+			this.focusNextInput(e)
+		},
+
+		/**
+		 * Create a new local answer option from the current input
+		 *
+		 * @param {Event} e the triggering event
+		 */
+		async createLocalAnswer(e) {
+			if (this.isIMEComposing || e?.isComposing) {
+				return
+			}
+
+			const value = this.localText ?? ''
+			if (!value.trim()) {
+				return
+			}
+
+			const answer = { ...this.answer, text: value, local: false }
+
+			// Prevent any queued debounced PATCHes from running while creating
+			this.queue.pause()
+			try {
+				const newAnswer = await this.createAnswer(answer)
+
+				// Forward changes, but use current answer.text to avoid erasing
+				// any in-between changes while creating the answer
+				newAnswer.text = this.$refs.input.value
+				this.localText = ''
+
+				this.$emit('createAnswer', this.index, newAnswer)
+			} finally {
+				// Clear pending update tasks (stale PATCHes) before resuming processing
+				this.queue.clear()
+				this.queue.start()
+			}
+		},
+
+		/**
+		 * Request a new answer
+		 *
+		 * @param {Event} e the triggering event
+		 */
+		focusNextInput(e) {
+			if (this.isIMEComposing || e?.isComposing) {
+				return
+			}
+			if (this.index <= this.maxIndex) {
+				this.$emit('focusNext', this.index, this.optionType)
+			}
+		},
+
+		/**
+		 * Emit a delete request for this answer
+		 * when pressing the delete key on an empty input
+		 *
+		 * @param {Event} e the event
+		 */
+		async deleteEntry(e) {
+			if (this.isIMEComposing || e?.isComposing) {
+				return
+			}
+
+			if (this.answer.local) {
+				return
+			}
+
+			if (e.type !== 'click' && this.$refs.input.value.length !== 0) {
+				return
+			}
+
+			// Dismiss delete key action
+			e.preventDefault()
+
+			// do this in queue to prevent race conditions between PATCH and DELETE
+			this.queue.add(() => {
+				this.$emit('delete', this.answer)
+				// Prevent any patch requests
+				this.queue.pause()
+				this.queue.clear()
+			})
+		},
+
+		/**
+		 * Create an unsynced answer to the server
+		 *
+		 * @param {object} answer the answer to sync
+		 * @return {object} answer
+		 */
+		async createAnswer(answer) {
+			try {
+				const response = await axios.post(
+					generateOcsUrl(
+						'apps/forms/api/v3/forms/{id}/questions/{questionId}/options',
+						{
+							id: this.formId,
+							questionId: answer.questionId,
+						},
+					),
+					{
+						optionTexts: [answer.text],
+						optionType: answer.optionType,
+					},
+				)
+				logger.debug('Created answer', { answer })
+
+				// Was synced once, this is now up to date with the server
+				delete answer.local
+				return OcsResponse2Data(response)[0]
+			} catch (error) {
+				logger.error('Error while saving answer', { answer, error })
+				showError(t('forms', 'Error while saving the answer'))
+			}
+
+			return answer
+		},
+
+		/**
+		 * Save to the server, only do it after 500ms
+		 * of no change
+		 *
+		 * @param {object} answer the answer to sync
+		 */
+		async updateAnswer(answer) {
+			try {
+				await axios.patch(
+					generateOcsUrl(
+						'apps/forms/api/v3/forms/{id}/questions/{questionId}/options/{optionId}',
+						{
+							id: this.formId,
+							questionId: answer.questionId,
+							optionId: answer.id,
+						},
+					),
+					{
+						keyValuePairs: {
+							text: answer.text,
+						},
+					},
+				)
+				logger.debug('Updated answer', { answer })
+			} catch (error) {
+				logger.error('Error while saving answer', { answer, error })
+				showError(t('forms', 'Error while saving the answer'))
+			}
+		},
+
+		/**
+		 * Reorder option but keep focus on the button
+		 */
+		onMoveDown() {
+			this.$emit('moveDown')
+			this.focusButton(
+				this.index < this.maxIndex - 1
+					? 'buttonOptionDown'
+					: 'buttonOptionUp',
+			)
+		},
+
+		onMoveUp() {
+			this.$emit('moveUp')
+			this.focusButton(this.index > 1 ? 'buttonOptionUp' : 'buttonOptionDown')
+		},
+
+		focusButton(refName) {
+			this.$nextTick(() => this.$refs[refName].$el.focus())
+		},
+
+		/**
+		 * Handle composition start event for IME inputs
+		 */
+		onCompositionStart() {
+			this.isIMEComposing = true
+		},
+
+		/**
+		 * Handle composition end event for IME inputs
+		 *
+		 * @param {CompositionEvent} event The input event that triggered adding a new entry
+		 */
+		onCompositionEnd({ target, isComposing }) {
+			this.isIMEComposing = false
+			if (!isComposing) {
+				this.onInput({ target, isComposing })
+			}
+		},
+	},
+}
+</script>
+
+<style lang="scss" scoped>
+.question__item {
+	position: relative;
+	display: inline-flex;
+	min-height: var(--default-clickable-area);
+	width: 100%;
+
+	&__pseudoInput {
+		color: var(--color-primary-element);
+		margin-inline-start: 2px;
+		z-index: 1;
+	}
+
+	.option__actions {
+		display: flex;
+		position: absolute;
+		gap: var(--default-grid-baseline);
+		inset-inline-end: 12px;
+		height: 100%;
+	}
+
+	.option__drag-handle {
+		color: var(--color-text-maxcontrast);
+		cursor: grab;
+		margin-block: auto;
+
+		&:hover,
+		&:focus,
+		&:focus-within {
+			color: var(--color-main-text);
+		}
+
+		&:active {
+			cursor: grabbing;
+		}
+
+		> * {
+			cursor: grab;
+		}
+	}
+
+	.question__input {
+		width: calc(100% - var(--default-clickable-area));
+		position: relative;
+		inset-inline-start: -12px;
+		margin-inline-end: -12px !important;
+
+		&--shifted {
+			inset-inline-start: calc(-1 * var(--default-clickable-area));
+			padding-inline-start: calc(
+				var(--default-clickable-area) + var(--default-grid-baseline)
+			) !important;
+		}
+	}
+}
+</style>

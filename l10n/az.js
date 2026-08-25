@@ -1,0 +1,28 @@
+OC.L10N.register(
+    "forms",
+    {
+    "No" : "Xeyir",
+    "Yes" : "Bəli",
+    "Copy" : "Kopyala",
+    "Shared with you" : "Shared with you",
+    "Select groups" : "Qrupları seç",
+    "Comments" : "Şərhlər",
+    "Cancel" : "Cancel",
+    "Delete" : "Sil",
+    "Other" : "Digər",
+    "never" : "heç vaxt",
+    "Group" : "Qrup",
+    "Share link" : "Linki yayımla",
+    "Edit" : "Dəyişiklik et",
+    "Share" : "Paylaş",
+    "Description" : "Açıqlanma",
+    "Summary" : "Xülasə",
+    "Download" : "Yüklə",
+    "Search" : "Axtarış",
+    "Sharing" : "Paylaşılır",
+    "Settings" : "Quraşdırmalar",
+    "Abort" : "Durdur",
+    "Date" : "Date",
+    "Time" : "Vaxt"
+},
+"nplurals=2; plural=(n != 1);");
